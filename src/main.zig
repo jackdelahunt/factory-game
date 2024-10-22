@@ -73,6 +73,17 @@ fn draw_rectangle(x: f32, y: f32, width: f32, height: f32, color: raylib.Color) 
     );
 }
 
+fn draw_rectangle_gradient_vertical(x: f32, y: f32, width: f32, height: f32, start_color: raylib.Color, end_color: raylib.Color) void {
+    raylib.DrawRectangleGradientV(
+        @as(c_int, @intFromFloat(x)), 
+        @as(c_int, @intFromFloat(y)), 
+        @as(c_int, @intFromFloat(width)), 
+        @as(c_int, @intFromFloat(height)), 
+        start_color,
+        end_color
+    );
+}
+
 fn draw_circle(x: f32, y: f32, radius: f32, color: raylib.Color) void {
     raylib.DrawCircle(
         @as(c_int, @intFromFloat(x)), 
@@ -178,6 +189,7 @@ const Tile = enum(u8) {
                             .item_type = null,
                             .count = 0,
                         },
+                        .fuel_item_in_use = null,
                         .progress = 0,
                         .valid_placement = false,
                         .fuel_buffer = 0,
@@ -200,6 +212,7 @@ const Tile = enum(u8) {
                             .item_type = null,
                             .count = 0,
                         },
+                        .fuel_item_in_use = null,
                         .progress = 0,
                         .fuel_buffer = 0,
                     }
@@ -213,21 +226,30 @@ const Tile = enum(u8) {
 const TileData = struct {
     const Self = @This();
 
+    const miner_max_progress = 30; // 3 seconds
+    const furnace_max_progress = 30; // 3 seconds
+
     tile_index: usize,
     data: union(enum) {
         miner: struct{
             input: InventorySlot,
             output: InventorySlot,
-            progress: u8,
-            fuel_buffer: u8, // amount of ticks remaining until fuel is over
+            fuel_item_in_use: ?Item, // the item that is *currently* being used i.e. burned, this can be differnt to the input fueled
+                                     // used by ui to track the current item being burned and display progress bar
+
+            progress: i64,          // amount of ticks used for current item 
+            fuel_buffer: i64,       // amount of ticks remaining until fuel is over
             valid_placement: bool,
         },
         furnace: struct{
             fuel_input: InventorySlot,
             ingredient_input: InventorySlot,
             output: InventorySlot,
-            progress: u8,
-            fuel_buffer: u8, // amount of ticks remaining until fuel is over
+            fuel_item_in_use: ?Item, // the item that is *currently* being used i.e. burned, this can be differnt to the input fueled
+                                     // used by ui to track the current item being burned and display progress bar
+
+            progress: i64,          // amount of ticks used for current item   
+            fuel_buffer: i64,       // amount of ticks remaining until fuel is over
         }
     },
 
@@ -264,19 +286,22 @@ const TileData = struct {
             .miner => |*miner| {
                 if(!miner.valid_placement) return;
 
-                // if there is no progress then cehck if fuel needs
-                // to be consumed
+                if(miner.fuel_buffer == 0) {
+                    miner.fuel_item_in_use = null;
+                    miner.progress = 0;
+                }
+
                 if(miner.fuel_buffer == 0 and miner.input.count > 0) {
+                    miner.fuel_buffer = miner.input.item_type.?.fuel_smelt_count().? * TileData.miner_max_progress;
+                    miner.fuel_item_in_use = miner.input.item_type;
                     miner.input.count -= 1;
                     if(miner.input.count == 0) miner.input.item_type = null;
-
-                    miner.fuel_buffer += 30 * 8;
                 }
 
                 if(miner.fuel_buffer > 0) {
                     miner.progress += 1;
                     miner.fuel_buffer -= 1;
-                    if(miner.progress >= 30) {
+                    if(miner.progress >= TileData.miner_max_progress) {
                         miner.progress = 0;
 
                         const tile = game.background_tiles[self.tile_index];
@@ -290,17 +315,22 @@ const TileData = struct {
                 if(furnace.ingredient_input.count == 0) return;
                 if(furnace.output.item_type != null and furnace.ingredient_input.item_type.?.item_when_smelted() != furnace.output.item_type) return;
 
+                if(furnace.fuel_buffer == 0) {
+                    furnace.fuel_item_in_use = null;
+                    furnace.progress = 0;
+                }
+
                 if(furnace.fuel_buffer == 0 and furnace.fuel_input.count > 0) {
+                    furnace.fuel_buffer += furnace.fuel_input.item_type.?.fuel_smelt_count().? * TileData.furnace_max_progress;
+                    furnace.fuel_item_in_use = furnace.fuel_input.item_type;
                     furnace.fuel_input.count -= 1;
                     if(furnace.fuel_input.count == 0) furnace.fuel_input.item_type = null;
-
-                    furnace.fuel_buffer += 30 * 8;
                 }
 
                 if(furnace.fuel_buffer > 0) {
                     furnace.progress += 1;
                     furnace.fuel_buffer -= 1;
-                    if(furnace.progress >= 30) {
+                    if(furnace.progress >= TileData.furnace_max_progress) {
                         furnace.progress = 0;
 
                         const output_item = furnace.ingredient_input.item_type.?.item_when_smelted();
@@ -362,6 +392,13 @@ const Item = enum {
         return switch (self.*) {  
             .coal => true,
             .miner, .iron, .furnace, .iron_ingot => false
+        };
+    }
+
+    fn fuel_smelt_count(self: *const Self) ?i64 {
+        return switch (self.*) {  
+            .coal => 10,
+            .miner, .iron, .furnace, .iron_ingot => null
         };
     }
 
@@ -799,31 +836,34 @@ const Game = struct {
 
         // inventory
         {
-            const slot_height = 50;
-            const slot_width = 50;
+            const size = 50;
             const padding = 5;
-            const slot_y = screen_height - slot_height - padding;
+            const slot_y = screen_height - size - padding;
 
             for(0..self.player.inventory.len) |i| {
+
+                const color = switch (i) {
+                    0 => raylib.RED,
+                    1 => raylib.ORANGE,
+                    2 => raylib.YELLOW,
+                    3 => raylib.GREEN,
+                    4 => raylib.SKYBLUE,
+                    5 => raylib.BLUE,
+                    6 => raylib.VIOLET,
+                    7 => raylib.WHITE,
+                    8 => raylib.BLACK,
+                    else => unreachable
+                };
+
                 // adding the i * padding gives the gap
-                const slot_x: f32 = @floatFromInt((slot_width * i) + (i * padding) + padding);
-                draw_texture(item_slot_texture, slot_x, slot_y, slot_width, slot_height);
-
-                if(self.player.inventory[i].item_type) |item| {
-                    const item_texture = item.get_texture();
-                    draw_texture(item_texture, slot_x, slot_y, slot_width, slot_height);
-
-                    // max size is 99 so 2 bytes is fine here
-                    var text_buffer = std.mem.zeroes([2]u8);
-                    const string = std.fmt.bufPrint(text_buffer[0..], "{}", .{self.player.inventory[i].count}) catch unreachable;
-                    draw_text(string, slot_x, slot_y, 20, raylib.WHITE);
-                }
+                const slot_x: f32 = @floatFromInt((size * i) + (i * padding) + padding);
+                draw_inventory_slot(&self.player.inventory[i], slot_x, slot_y, size, color);
 
                 // draw item selected indicator
                 if(i == self.player.selected_item) {
                     const indicator_radius = 5;
                     const indicator_y = slot_y - 10;
-                    const indicator_x = slot_x + (slot_width * 0.5);
+                    const indicator_x = slot_x + (size * 0.5);
 
                     draw_circle(indicator_x, indicator_y, indicator_radius, raylib.YELLOW);
                 }
@@ -853,6 +893,12 @@ const Game = struct {
 
                     draw_inventory_slot(&miner.input, output_slot_x, input_slot_y, size, raylib.BLUE);  // input slot
                     draw_inventory_slot(&miner.output, output_slot_x, output_slot_y, size, raylib.RED); // output slot
+
+                    const progress_bar_x = output_slot_x + size + padding;
+                    draw_progress_bar_vertical(progress_bar_x, output_slot_y, 8, size, raylib.BLUE, raylib.WHITE, miner.progress, TileData.miner_max_progress);
+                    if(miner.fuel_item_in_use) |fuel_item| {
+                        draw_progress_bar_vertical(progress_bar_x, input_slot_y, 8, size, raylib.RED, raylib.ORANGE, miner.fuel_buffer, fuel_item.fuel_smelt_count().? * TileData.miner_max_progress);
+                    }
                 },
                 .furnace => |*furnace| {
                     const mouse_position = raylib.GetMousePosition();
@@ -861,11 +907,19 @@ const Game = struct {
                     const size = 50;
                     const padding = 5;
                     const input_slot_y = output_slot_y - (size + padding);
-                    const ingredient_slot_x = output_slot_x + (size + padding);
+
+                    const progress_bar_x = output_slot_x + size + padding;
+                    const progress_bar_width = 8;
+                    const ingredient_slot_x = progress_bar_x + progress_bar_width + padding;
 
                     draw_inventory_slot(&furnace.fuel_input, output_slot_x, input_slot_y, size, raylib.BLUE);           // fuel input slot
                     draw_inventory_slot(&furnace.ingredient_input, ingredient_slot_x, input_slot_y, size, raylib.BLUE); // ingredient slot
                     draw_inventory_slot(&furnace.output, output_slot_x, output_slot_y, size, raylib.RED);               // output slot
+               
+                    draw_progress_bar_vertical(progress_bar_x, output_slot_y, progress_bar_width, size, raylib.BLUE, raylib.WHITE, furnace.progress, TileData.furnace_max_progress);
+                    if(furnace.fuel_item_in_use) |fuel_item| {
+                        draw_progress_bar_vertical(progress_bar_x, input_slot_y, progress_bar_width, size, raylib.RED, raylib.ORANGE, furnace.fuel_buffer, fuel_item.fuel_smelt_count().? * TileData.furnace_max_progress);
+                    }
                 }
             }
         }
@@ -1057,6 +1111,15 @@ fn draw_inventory_slot(inventory_slot: *const InventorySlot, x: f32, y: f32, siz
         const string = std.fmt.bufPrint(text_buffer[0..], "{}", .{inventory_slot.count}) catch unreachable;
         draw_text(string, x, y, 20, raylib.WHITE);
     }
+}
+
+fn draw_progress_bar_vertical(x: f32, y: f32, width: f32, max_height: f32, start_color: raylib.Color, end_color: raylib.Color, value: i64, max_value: i64) void {
+    const progress =  @as(f32, @floatFromInt(value)) / @as(f32, @floatFromInt(max_value));
+    const progress_bar_end_y = y + max_height;
+    const progress_bar_start_y = progress_bar_end_y - (progress * max_height);
+    const progress_bar_height = progress_bar_end_y - progress_bar_start_y;
+
+    draw_rectangle_gradient_vertical(x, progress_bar_start_y, width, progress_bar_height, end_color, start_color);
 }
 
 fn init_raylib(title: [*c]const u8) void {
