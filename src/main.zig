@@ -15,10 +15,10 @@ const raygui = @cImport(@cInclude("raygui.h"));
 const fastnoise = @import("fastnoise.zig");
 
 
-const player_speed: f32 = 200;
+const player_speed: f32 = 450;
 
-const screen_width = 1200;
-const screen_height = 800;
+const default_screen_width = 1200;
+const default_screen_height = 800;
 
 const tile_width: i64 = 24;
 const tile_height: i64 = 24;
@@ -46,6 +46,7 @@ const iron_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/ir
 const item_slot_image_path = "/Users/jdelahun/projects/zigraylib/images/items/item_slot.png";
 const coal_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/coal.png";
 const iron_ingot_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/iron_ingot.png";
+const stone_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/stone.png";
 
 // gloabal textures
 //
@@ -62,6 +63,37 @@ var iron_item_texture: raylib.Texture = undefined;
 var item_slot_texture: raylib.Texture = undefined;
 var coal_item_texture: raylib.Texture = undefined;
 var iron_ingot_item_texture: raylib.Texture = undefined;
+var stone_item_texture: raylib.Texture = undefined;
+
+const ore_table = [_]struct {
+    tile: Tile,
+    threshold: f32,
+    frequency: f32
+} {
+    .{
+        .tile = .stone,
+        .threshold = 0.3,
+        .frequency = 0.13
+    },
+    .{
+        .tile = .iron_ore,
+        .threshold = 0.15,
+        .frequency = 0.1
+    },
+    .{
+        .tile = .coal_ore,
+        .threshold = 0.15,
+        .frequency = 0.12
+    },
+};
+
+fn window_width() f32 {
+    return @as(f32, @floatFromInt(raylib.GetScreenWidth()));
+}
+
+fn window_height() f32 {
+    return @as(f32, @floatFromInt(raylib.GetScreenHeight()));
+}
 
 fn draw_rectangle(x: f32, y: f32, width: f32, height: f32, color: raylib.Color) void {
     raylib.DrawRectangle(
@@ -117,6 +149,16 @@ fn draw_texture(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32
     draw_texture_tint(texture, x, y, width, height, raylib.WHITE);
 }
 
+const TilePosition = struct {
+    x: usize, 
+    y: usize
+};
+
+const MousePosition = struct {
+    x: f32, 
+    y: f32
+};
+
 const Tile = enum(u8) {
     const Self = @This();
 
@@ -132,8 +174,8 @@ const Tile = enum(u8) {
     // different to if a player can break it
     fn can_be_mined(self: *const Self) bool {
         return switch (self.*) {
-            .iron_ore, .coal_ore => true,
-            .air, .grass, .stone, .miner, .furnace => false,
+            .iron_ore, .coal_ore, .stone => true,
+            .air, .grass, .miner, .furnace => false,
         };
     }
 
@@ -143,7 +185,8 @@ const Tile = enum(u8) {
         return switch (self.*) {
             .iron_ore => .iron,
             .coal_ore, => .coal,
-            .air, .grass, .stone, .miner, .furnace => null
+            .stone => .stone,
+            .air, .grass, .miner, .furnace => null
         };
     }
 
@@ -387,32 +430,33 @@ const Item = enum {
     coal,
     furnace,
     iron_ingot,
+    stone,
 
     fn can_be_fuel(self: *const Self) bool {
         return switch (self.*) {  
             .coal => true,
-            .miner, .iron, .furnace, .iron_ingot => false
+            .miner, .iron, .furnace, .iron_ingot, .stone => false
         };
     }
 
     fn fuel_smelt_count(self: *const Self) ?i64 {
         return switch (self.*) {  
             .coal => 10,
-            .miner, .iron, .furnace, .iron_ingot => null
+            .miner, .iron, .furnace, .iron_ingot, .stone => null
         };
     }
 
     fn can_be_smelted(self: *const Self) bool {
         return switch (self.*) {  
             .iron => true,
-            .miner, .furnace, .coal, .iron_ingot => false
+            .miner, .furnace, .coal, .iron_ingot, .stone => false
         };
     }
 
     fn item_when_smelted(self: *const Self) ?Item {
         return switch (self.*) {  
             .iron => .iron_ingot,
-            .miner, .furnace, .coal, .iron_ingot => null
+            .miner, .furnace, .coal, .iron_ingot, .stone => null
         };
     }
 
@@ -423,6 +467,7 @@ const Item = enum {
             .coal => coal_item_texture,
             .furnace => furnace_tile_texture,
             .iron_ingot => iron_ingot_item_texture,
+            .stone => stone_item_texture
         };
     }
 
@@ -434,7 +479,7 @@ const Item = enum {
         return switch (self.*) {
             .miner => .miner,
             .furnace => .furnace,
-            .iron, .coal, .iron_ingot => null,
+            .iron, .coal, .iron_ingot, .stone => null,
         };
     }
 };
@@ -569,16 +614,17 @@ const Game = struct {
         a: bool,
         s: bool,
         d: bool,
+        f: bool,
         up_arrow: bool,
         down_arrow: bool,
         numbers: [9]bool, // we ignore 0
         scroll: f32,
         left_mouse: bool,
         right_mouse: bool,
-        ctrl: bool
+        ctrl: bool,
+        left_shift: bool
     };
 
-    title: [*c]const u8,
     player: Player,
     camera: raylib.Camera2D,
     input: Input,
@@ -589,7 +635,7 @@ const Game = struct {
     allocator: std.mem.Allocator,
     tick_timer: f32,
 
-    fn init(title: [*c]const u8, allocator: std.mem.Allocator) !Game {
+    fn init(allocator: std.mem.Allocator) !Game {
         const background_tiles = try allocator.alloc(Tile, world_tile_height * world_tile_width);
         const forground_tiles = try allocator.alloc(Tile, world_tile_height * world_tile_width);
 
@@ -599,7 +645,6 @@ const Game = struct {
         }
 
         var game = Game{
-            .title = title,
             .player = Player{
                 .x = @divFloor(world_tile_width * tile_width, 2),
                 .y = @divFloor(world_tile_height * tile_height, 2),
@@ -608,7 +653,7 @@ const Game = struct {
             },
             .camera = .{
                 .target = .{.x = 0, .y = 0}, // gets set to player x and y before first frame rendered
-                .offset = .{.x = screen_width / 2, .y = screen_height / 2},
+                .offset = .{.x = window_width() / 2, .y = window_height() / 2},
                 .rotation = 0,
                 .zoom = 2,
             },
@@ -638,7 +683,7 @@ const Game = struct {
         game.player.inventory[2] = .{ .item_type = .coal, .count = 20 };
         game.player.inventory[3] = .{ .item_type = .coal, .count = 20 };
         game.player.inventory[4] = .{ .item_type = .furnace, .count = 10 };
-
+        game.player.inventory[5] = .{ .item_type = .stone, .count = 10 };
 
         return game;
     }
@@ -658,8 +703,9 @@ const Game = struct {
         self.input.a = raylib.IsKeyDown(raylib.KEY_A);
         self.input.s = raylib.IsKeyDown(raylib.KEY_S);
         self.input.d = raylib.IsKeyDown(raylib.KEY_D);
-        self.input.up_arrow = raylib.IsKeyDown(raylib.KEY_UP);
-        self.input.down_arrow = raylib.IsKeyDown(raylib.KEY_DOWN);
+        self.input.f = raylib.IsKeyPressed(raylib.KEY_F);
+        self.input.up_arrow = raylib.IsKeyPressed(raylib.KEY_UP);
+        self.input.down_arrow = raylib.IsKeyPressed(raylib.KEY_DOWN);
         self.input.numbers[0] = raylib.IsKeyDown(raylib.KEY_ONE);
         self.input.numbers[1] = raylib.IsKeyDown(raylib.KEY_TWO);
         self.input.numbers[2] = raylib.IsKeyDown(raylib.KEY_THREE);
@@ -674,6 +720,7 @@ const Game = struct {
         self.input.left_mouse = raylib.IsMouseButtonPressed(0);
         self.input.left_mouse = raylib.IsMouseButtonPressed(0);
         self.input.ctrl = raylib.IsKeyDown(raylib.KEY_LEFT_CONTROL);
+        self.input.left_shift = raylib.IsKeyDown(raylib.KEY_LEFT_SHIFT);
     }
 
     fn tick_update(self: *Self) void {
@@ -713,82 +760,79 @@ const Game = struct {
             }
         }
 
-        if(self.input.scroll > 0 and self.player.selected_item > 0) {
+        if(self.input.scroll > 0 and self.player.selected_item > 0 and !self.input.left_shift) {
             self.player.selected_item -= 1;
             
-        } else if(self.input.scroll < 0 and self.player.selected_item < self.player.inventory.len - 1) {
+        } else if(self.input.scroll < 0 and self.player.selected_item < self.player.inventory.len - 1 and !self.input.left_shift) {
             self.player.selected_item += 1;
         }
 
         // camera update
-        const zoom_rate = 0.05;
-
         if(self.input.up_arrow) {
-            self.camera.zoom += zoom_rate;
+            self.camera.zoom += self.camera.zoom * 0.1;
         }
 
-        if(self.input.down_arrow) {
-            self.camera.zoom -= zoom_rate;
-            if(self.camera.zoom <= 0) self.camera.zoom = 0.1;
+        if(self.input.down_arrow or (self.input.left_shift and self.input.scroll < 0)) {
+            self.camera.zoom -= self.camera.zoom * 0.1;
+            if(self.camera.zoom <= 0.4) self.camera.zoom = 0.4;
         }
 
         self.camera.target.x = self.player.x;
         self.camera.target.y = self.player.y; 
 
-        // mouse right click to place check
-        if(self.input.right_mouse and !self.input.ctrl) {
-            const tile_coords = self.get_mouse_in_tile_coords();
+        mouse_update: {
+            const mouse_position = self.get_mouse_world_position();
+            
+            if(!mouse_in_world_bounds(mouse_position)) {
+                break :mouse_update;
+            }
+
+            const tile_coords = mouse_position_to_tile_position(mouse_position);
             const tile_index = get_tile_index_from_x_and_y(tile_coords.x, tile_coords.y);
 
-            const current_selected_item = self.player.get_selected_item_type();
-            if(current_selected_item != null) {
-                const items_tile = current_selected_item.?.get_tile_when_placed();
-                if(items_tile) |tile| {
-                    // only pop the item from the inventory when it has an
-                    // associated tile type to place
-                    if(self.place_tile_in_foreground(tile_index, tile)) {
-                        _ = self.player.try_pop_selected_item();
+            if(self.input.right_mouse and !self.input.ctrl) {
+                const current_selected_item = self.player.get_selected_item_type();
+                if(current_selected_item != null) {
+                    const items_tile = current_selected_item.?.get_tile_when_placed();
+                    if(items_tile) |tile| {
+                        // only pop the item from the inventory when it has an
+                        // associated tile type to place
+                        if(self.place_tile_in_foreground(tile_index, tile)) {
+                            _ = self.player.try_pop_selected_item();
+                        }
                     }
                 }
             }
-        }
-
-        // mouse left click to break check
-        if(self.input.left_mouse and !self.input.ctrl) {
-            const tile_coords = self.get_mouse_in_tile_coords();
-            const tile_index = get_tile_index_from_x_and_y(tile_coords.x, tile_coords.y);
-            const removed_tile = self.remove_tile_in_foreground(tile_index);
-
-            if(removed_tile) |tile| {
-                if(tile.item_when_broken()) |item| {
-                    // right now if the player has no space in the inventory
-                    // we just ignore it and the item vanishes of course
-                    // this is not ideal
-                    _ = self.player.add_item_to_inventory(item, 1);
+    
+            if(self.input.left_mouse and !self.input.ctrl) {
+                const removed_tile = self.remove_tile_in_foreground(tile_index);
+    
+                if(removed_tile) |tile| {
+                    if(tile.item_when_broken()) |item| {
+                        // right now if the player has no space in the inventory
+                        // we just ignore it and the item vanishes of course
+                        // this is not ideal
+                        _ = self.player.add_item_to_inventory(item, 1);
+                    }
+                }
+            }
+    
+            if(self.input.right_mouse and self.input.ctrl) {
+                const tile_data = self.get_tile_data(tile_index);
+    
+                if(tile_data != null)  {
+                    tile_data.?.ctrl_right_click(self);
+                }
+            }
+    
+            if(self.input.left_mouse and self.input.ctrl) {
+                const tile_data = self.get_tile_data(tile_index);
+    
+                if(tile_data != null)  {
+                    tile_data.?.ctrl_left_click(self);
                 }
             }
         }
-
-        if(self.input.right_mouse and self.input.ctrl) {
-            const tile_coords = self.get_mouse_in_tile_coords();
-            const tile_index = get_tile_index_from_x_and_y(tile_coords.x, tile_coords.y);
-            const tile_data = self.get_tile_data(tile_index);
-
-            if(tile_data != null)  {
-                tile_data.?.ctrl_right_click(self);
-            }
-        }
-
-        if(self.input.left_mouse and self.input.ctrl) {
-            const tile_coords = self.get_mouse_in_tile_coords();
-            const tile_index = get_tile_index_from_x_and_y(tile_coords.x, tile_coords.y);
-            const tile_data = self.get_tile_data(tile_index);
-
-            if(tile_data != null)  {
-                tile_data.?.ctrl_left_click(self);
-            }
-        }
-        
     }
 
     fn draw(self: *Self) void {
@@ -831,14 +875,14 @@ const Game = struct {
         {
             var fps_buffer = std.mem.zeroes([32]u8);
             const fps_string = std.fmt.bufPrint(fps_buffer[0..], "fps: {}", .{raylib.GetFPS()}) catch unreachable;
-            draw_text(fps_string, screen_width - 100, screen_height - 20, 20, raylib.WHITE);
+            draw_text(fps_string, window_width() - 100, window_height() - 20, 20, raylib.WHITE);
         }
 
         // inventory
         {
             const size = 50;
             const padding = 5;
-            const slot_y = screen_height - size - padding;
+            const slot_y = window_height() - size - padding;
 
             for(0..self.player.inventory.len) |i| {
 
@@ -872,21 +916,31 @@ const Game = struct {
 
         // ctrl hover ui 
         hover_ui: {
-            if(!self.input.ctrl) break :hover_ui;
+            if(!self.input.ctrl) {
+                break :hover_ui;
+            }
 
-            const tile_coords = self.get_mouse_in_tile_coords();
+            const mouse_world_position = self.get_mouse_world_position();
+            if(!mouse_in_world_bounds(mouse_world_position)) {
+                break :hover_ui;
+            }
+
+            const mouse_screen_position = get_mouse_screen_position();
+
+            const tile_coords = mouse_position_to_tile_position(mouse_world_position);
             const tile_index = get_tile_index_from_x_and_y(tile_coords.x, tile_coords.y);
             const tile = self.forground_tiles[tile_index];
 
-            if(!tile.has_tile_data()) break :hover_ui;
+            if(!tile.has_tile_data()) {
+                break :hover_ui;
+            }
 
             const tile_data = self.get_tile_data(tile_index) orelse unreachable; 
             
             switch (tile_data.data) {
                 .miner => |*miner| {
-                    const mouse_position = raylib.GetMousePosition();
-                    const output_slot_x = mouse_position.x + 15;
-                    const output_slot_y = mouse_position.y + 15;
+                    const output_slot_x = mouse_screen_position.x + 15;
+                    const output_slot_y = mouse_screen_position.y + 15;
                     const size = 50;
                     const padding = 5;
                     const input_slot_y = output_slot_y - (size + padding);
@@ -901,9 +955,8 @@ const Game = struct {
                     }
                 },
                 .furnace => |*furnace| {
-                    const mouse_position = raylib.GetMousePosition();
-                    const output_slot_x = mouse_position.x + 15;
-                    const output_slot_y = mouse_position.y + 15;
+                    const output_slot_x = mouse_screen_position.x + 15;
+                    const output_slot_y = mouse_screen_position.y + 15;
                     const size = 50;
                     const padding = 5;
                     const input_slot_y = output_slot_y - (size + padding);
@@ -994,17 +1047,14 @@ const Game = struct {
         }
        
         raylib.EndDrawing();
-    }
+    } 
 
-    fn get_mouse_in_tile_coords(self: *const Self) struct {x: usize, y: usize} {
+    fn get_mouse_world_position(self: *const Self) MousePosition {
         const screen_position = raylib.GetMousePosition();
         const world_position = raylib.GetScreenToWorld2D(screen_position, self.camera);
     
-        const x = @divFloor(@as(usize, @intFromFloat(world_position.x)), tile_width);
-        const y = @divFloor(@as(usize, @intFromFloat(world_position.y)), tile_height);
-    
-        return .{.x = x, .y = y};
-    }
+        return .{.x = world_position.x, .y = world_position.y};
+    } 
 
     // removes a tile in a given index in the foreground
     // and replaces it with air, if the tile has an associated
@@ -1076,28 +1126,74 @@ const Game = struct {
     }
 
     fn generate_world(self: *Game) void {
+        // base terrain pass
         for(0..self.background_tiles.len) |i| {
-            var noise = self.world_gen_noise.genNoise2D(@floatFromInt(@mod(i, world_tile_width)), @floatFromInt(@divFloor(i, world_tile_width)));
-
-            // normalise noise from -1 to 1 -> 0 to 1
-            noise = (noise + 1) * 0.5;
-
-            var tile_value: Tile = undefined;
-
-            if(noise < 0.5) {
-                tile_value = .grass;
-            } else if(noise < 0.60) {
-                tile_value = .stone;
-            } else if(noise < 0.80) {
-                tile_value = .iron_ore;
-            } else {
-                tile_value = .coal_ore;
-            }
-
+            // right now setting every tile by default
+            // to grass at some point this will change
+            const tile_value: Tile = .grass;
             self.background_tiles[i] = tile_value;
+        }
+
+        // ore generation pass
+        for(0..self.background_tiles.len) |i| {
+            for(&ore_table) |*ore| {
+                const noise_generator = fastnoise.Noise(f32) {
+                    .seed = 6,
+                    .noise_type = .perlin,
+                    .frequency = ore.frequency,
+                    .gain = 0.01,
+                    .fractal_type = .fbm,
+                    .lacunarity = 0.40,
+                    .cellular_distance = .euclidean,
+                    .cellular_return = .distance2,
+                    .cellular_jitter_mod = 0.88,
+                    .octaves = 2
+                };
+
+                var noise = noise_generator.genNoise2D(@floatFromInt(@mod(i, world_tile_width)), @floatFromInt(@divFloor(i, world_tile_width)));
+
+                // normalise noise from -1 to 1 -> 0 to 1
+                noise = (noise + 1) * 0.5;
+
+                if(noise < ore.threshold) {
+                    self.background_tiles[i] = ore.tile;
+                    continue;
+                }
+            }
         }
     }
 };
+
+fn get_mouse_screen_position() MousePosition {
+    const screen_position = raylib.GetMousePosition();
+    return .{.x = screen_position.x, .y = screen_position.y};
+}
+
+fn mouse_position_to_tile_position(position: MousePosition) TilePosition {
+    // used for debuging should be removed at some point
+    if(!mouse_in_world_bounds(position)) {
+        std.debug.panic("trying to get mouse pos when out of bounds, need to check before calling: {d} {d}\n", .{position.x, position.y}) ;
+    }
+
+    const x = @divFloor(@as(usize, @intFromFloat(position.x)), tile_width);
+    const y = @divFloor(@as(usize, @intFromFloat(position.y)), tile_height);
+    
+    return .{.x = x, .y = y};
+}
+
+fn valid_tile_position(position: TilePosition) bool {
+    if(position.x > world_tile_width) return false;
+    if(position.y > world_tile_height) return false;
+
+    return true;
+}
+
+fn mouse_in_world_bounds(position: MousePosition) bool {
+    if(position.x < 0 or position.x > (world_tile_width * tile_width)) return false;
+    if(position.y < 0 or position.y > (world_tile_height * tile_height)) return false;
+
+    return true;
+}
 
 fn draw_inventory_slot(inventory_slot: *const InventorySlot, x: f32, y: f32, size: f32, tint: raylib.Color) void {
     draw_texture_tint(item_slot_texture, x, y, size, size, tint);
@@ -1123,7 +1219,7 @@ fn draw_progress_bar_vertical(x: f32, y: f32, width: f32, max_height: f32, start
 }
 
 fn init_raylib(title: [*c]const u8) void {
-        raylib.InitWindow(screen_width, screen_height, title);
+        raylib.InitWindow(default_screen_width, default_screen_height, title);
         raylib.SetTargetFPS(0);
 }
 
@@ -1143,11 +1239,8 @@ pub fn main() !void {
  
     const allocator = game_arena.allocator();
 
-    var game = try Game.init("hello sailor", allocator);
-
-    init_raylib(game.title);
-    game.generate_world();
-
+    init_raylib("factory game");
+ 
     // tile texture setup
     grass_tile_texture = raylib.LoadTexture(grass_tile_image_path);
     stone_tile_texture = raylib.LoadTexture(stone_tile_image_path);
@@ -1161,6 +1254,9 @@ pub fn main() !void {
     coal_item_texture = raylib.LoadTexture(coal_item_image_path);
     furnace_tile_texture = raylib.LoadTexture(furnace_tile_image_path);
     iron_ingot_item_texture = raylib.LoadTexture(iron_ingot_item_image_path);
+    stone_item_texture = raylib.LoadTexture(stone_item_image_path);
 
+    var game = try Game.init(allocator);
+    game.generate_world();
     game.run();
 }
