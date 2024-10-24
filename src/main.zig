@@ -39,6 +39,8 @@ const iron_ore_tile_image_path = "/Users/jdelahun/projects/zigraylib/images/tile
 const miner_tile_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/miner.png";
 const coal_ore_tile_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/coal_ore.png";
 const furnace_tile_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/furnace.png";
+const tree_base_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/tree_base.png";
+const tree_0_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/tree_0.png";
 
 
 // ITEMS
@@ -47,6 +49,8 @@ const item_slot_image_path = "/Users/jdelahun/projects/zigraylib/images/items/it
 const coal_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/coal.png";
 const iron_ingot_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/iron_ingot.png";
 const stone_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/stone.png";
+const wood_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/wood.png";
+
 
 // gloabal textures
 //
@@ -57,6 +61,8 @@ var iron_ore_tile_texture: raylib.Texture = undefined;
 var miner_tile_texture: raylib.Texture = undefined;
 var coal_ore_tile_texture: raylib.Texture = undefined;
 var furnace_tile_texture: raylib.Texture = undefined;
+var tree_base_tile_texture: raylib.Texture = undefined;
+var tree_0_tile_texture: raylib.Texture = undefined;
 
 // ITEMS
 var iron_item_texture: raylib.Texture = undefined;
@@ -64,6 +70,7 @@ var item_slot_texture: raylib.Texture = undefined;
 var coal_item_texture: raylib.Texture = undefined;
 var iron_ingot_item_texture: raylib.Texture = undefined;
 var stone_item_texture: raylib.Texture = undefined;
+var wood_item_texture: raylib.Texture = undefined;
 
 const ore_table = [_]struct {
     tile: Tile,
@@ -162,6 +169,9 @@ const MousePosition = struct {
 const Tile = enum(u8) {
     const Self = @This();
 
+    const miner_max_progress = 30; // 3 seconds
+    const furnace_max_progress = 30; // 3 seconds
+
     air,
     grass,
     stone,
@@ -169,13 +179,22 @@ const Tile = enum(u8) {
     miner,
     coal_ore,
     furnace,
+    tree_base,
+    tree_0,
+
+    fn is_tree_tile(self: *const Self) bool {
+        return switch (self.*) {
+             .tree_base, .tree_0 => true,
+            .air, .grass, .miner, .furnace, .iron_ore, .coal_ore, .stone => false,
+        };
+    }
 
     // can this tile be mined by a machine
     // different to if a player can break it
     fn can_be_mined(self: *const Self) bool {
         return switch (self.*) {
             .iron_ore, .coal_ore, .stone => true,
-            .air, .grass, .miner, .furnace => false,
+            .air, .grass, .miner, .furnace, .tree_base, .tree_0 => false,
         };
     }
 
@@ -186,7 +205,7 @@ const Tile = enum(u8) {
             .iron_ore => .iron,
             .coal_ore, => .coal,
             .stone => .stone,
-            .air, .grass, .miner, .furnace => null
+            .air, .grass, .miner, .furnace, .tree_base, .tree_0 => null
         };
     }
 
@@ -195,6 +214,7 @@ const Tile = enum(u8) {
         return switch (self.*) {
             .miner => .miner,
             .furnace => .furnace,
+            .tree_base, .tree_0 => .wood,
             .air, .grass, .stone, .iron_ore, .coal_ore => null
         };
     }
@@ -207,15 +227,175 @@ const Tile = enum(u8) {
             .iron_ore => iron_ore_tile_texture,
             .miner => miner_tile_texture,
             .coal_ore => coal_ore_tile_texture,
-            .furnace => furnace_tile_texture
+            .furnace => furnace_tile_texture,
+            .tree_base => tree_base_tile_texture,
+            .tree_0 => tree_0_tile_texture
         };
     }
 
     fn has_tile_data(self: *const Self) bool {
         return switch (self.*) {
             .miner, .furnace => true,
-            .air, .grass, .stone, .iron_ore, .coal_ore => false
+            .air, .grass, .stone, .iron_ore, .coal_ore, .tree_base, .tree_0 => false
         };
+    }
+
+    // update called when a player places this tile
+    fn placed_update(self: Self, tile_index: usize, tile_data: ?*TileData, game: *const Game) void {
+        switch (self) {
+            .miner => {
+                var miner = &tile_data.?.data.miner;
+                miner.valid_placement = game.background_tiles[tile_index].can_be_mined();
+            },
+            else => {},
+        }
+    }
+
+    // update called when the player removes this tile,
+    // after this is called the tile data is removed
+    // so no need to cleanup anything
+    fn removed_update(self: Self, tile_index: usize, tile_data: ?*TileData, game: *Game) void {
+        switch (self) {
+            .miner => {
+                var miner = &tile_data.?.data.miner;
+                game.player.add_stack_from_inventory_slot_to_inventory(&miner.input);
+                game.player.add_stack_from_inventory_slot_to_inventory(&miner.output);
+            },
+            .furnace => {
+                var furnace = &tile_data.?.data.furnace;
+                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.fuel_input);
+                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.ingredient_input);
+                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.output);
+            },
+            .tree_base, .tree_0 => {
+                const current_tile_position = get_x_and_y_from_tile_index(tile_index);
+                if(current_tile_position.y == 0) {
+                    return;
+                }
+
+                const above_tile_index = get_tile_index_from_x_and_y(current_tile_position.x, current_tile_position.y - 1);
+                if(!valid_tile_position(get_x_and_y_from_tile_index(above_tile_index))) {
+                    return;
+                }
+
+                if(game.forground_tiles[above_tile_index].is_tree_tile()) {
+                    const removed_tile = game.remove_tile_in_foreground(above_tile_index);
+                    const item = removed_tile.?.item_when_broken();
+                    _ = game.player.add_item_to_inventory(item.?, 1);
+                }
+
+            },
+            else => {},
+        }
+    }
+
+    // update called every tick
+    fn tick_update(self: Self, tile_index: usize, tile_data: ?*TileData, game: *const Game) void {
+        switch (self) {
+            .miner => {
+                var miner = &tile_data.?.data.miner;
+                if(!miner.valid_placement) return;
+
+                if(miner.fuel_buffer == 0) {
+                    miner.fuel_item_in_use = null;
+                    miner.progress = 0;
+                }
+
+                if(miner.fuel_buffer == 0 and miner.input.count > 0) {
+                    miner.fuel_buffer = miner.input.item_type.?.fuel_smelt_count().? * Tile.miner_max_progress;
+                    miner.fuel_item_in_use = miner.input.item_type;
+                    miner.input.count -= 1;
+                    if(miner.input.count == 0) miner.input.item_type = null;
+                }
+
+                if(miner.fuel_buffer > 0) {
+                    miner.progress += 1;
+                    miner.fuel_buffer -= 1;
+                    if(miner.progress >= Tile.miner_max_progress) {
+                        miner.progress = 0;
+
+                        const tile = game.background_tiles[tile_index];
+                        const item = tile.item_when_mined() orelse unreachable; // if this failed there was a logic error before
+                        miner.output.item_type = item;
+                        miner.output.count += 1;
+                    }
+                }
+            },
+            .furnace => {
+                var furnace = &tile_data.?.data.furnace;
+                if(furnace.ingredient_input.count == 0) return;
+                if(furnace.output.item_type != null and furnace.ingredient_input.item_type.?.item_when_smelted() != furnace.output.item_type) return;
+
+                if(furnace.fuel_buffer == 0) {
+                    furnace.fuel_item_in_use = null;
+                    furnace.progress = 0;
+                }
+
+                if(furnace.fuel_buffer == 0 and furnace.fuel_input.count > 0) {
+                    furnace.fuel_buffer += furnace.fuel_input.item_type.?.fuel_smelt_count().? * Tile.furnace_max_progress;
+                    furnace.fuel_item_in_use = furnace.fuel_input.item_type;
+                    furnace.fuel_input.count -= 1;
+                    if(furnace.fuel_input.count == 0) furnace.fuel_input.item_type = null;
+                }
+
+                if(furnace.fuel_buffer > 0) {
+                    furnace.progress += 1;
+                    furnace.fuel_buffer -= 1;
+                    if(furnace.progress >= Tile.furnace_max_progress) {
+                        furnace.progress = 0;
+
+                        const output_item = furnace.ingredient_input.item_type.?.item_when_smelted();
+                        furnace.output.item_type = output_item;
+                        furnace.output.count += 1;
+
+                        furnace.ingredient_input.count -= 1;
+                        if(furnace.ingredient_input.count == 0) {
+                            furnace.ingredient_input.item_type = null;
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn ctrl_left_click(self: Self, tile_index: usize, tile_data: ?*TileData, game: *Game) void {
+        _ = tile_index; // autofix
+        switch (self) {
+            .miner => {
+                var miner = &tile_data.?.data.miner;
+                game.player.add_stack_from_inventory_slot_to_inventory(&miner.output);
+            },
+            .furnace => {
+                var furnace = &tile_data.?.data.furnace;
+                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.output);
+            },
+            else => {},
+        }
+    }
+
+    fn ctrl_right_click(self: Self, tile_index: usize, tile_data: ?*TileData, game: *Game) void {
+        _ = tile_index; // autofix
+        switch (self) {
+            .miner => {
+                var miner = &tile_data.?.data.miner;
+                if(game.player.get_selected_item_type()) |input_item| {
+                    if(!input_item.can_be_fuel()) return;
+                    game.player.add_stack_from_selected_slot_to_inventory_slot(&miner.input);
+                }
+            },
+            .furnace => {
+                var furnace = &tile_data.?.data.furnace;
+                if(game.player.get_selected_item_type()) |input_item| {
+                    if(input_item.can_be_fuel()) {
+                        game.player.add_stack_from_selected_slot_to_inventory_slot(&furnace.fuel_input);
+                    } else if(input_item.can_be_smelted()) {
+                        game.player.add_stack_from_selected_slot_to_inventory_slot(&furnace.ingredient_input);
+                    }
+                }
+            },
+            else => {},
+        }
     }
 
     fn get_default_tile_data(self: *const Self) ?TileData {
@@ -261,17 +441,14 @@ const Tile = enum(u8) {
                     }
                 },
             },
-            .air, .grass, .stone, .iron_ore, .coal_ore  => null
+            .air, .grass, .stone, .iron_ore, .coal_ore, .tree_base, .tree_0 => null
         };
     }
 };
 
 const TileData = struct {
     const Self = @This();
-
-    const miner_max_progress = 30; // 3 seconds
-    const furnace_max_progress = 30; // 3 seconds
-
+ 
     tile_index: usize,
     data: union(enum) {
         miner: struct{
@@ -295,131 +472,6 @@ const TileData = struct {
             fuel_buffer: i64,       // amount of ticks remaining until fuel is over
         }
     },
-
-    // update called when a player places this tile
-    fn placed_update(self: *Self, game: *const Game) void {
-        switch (self.data) {
-            .miner => |*miner| {
-                miner.valid_placement = game.background_tiles[self.tile_index].can_be_mined();
-            },
-            .furnace => {}
-        }
-    }
-
-    // update called when the player removes this tile,
-    // after this is called the tile data is removed
-    // so no need to cleanup anything
-    fn removed_update(self: *Self, game: *Game) void {
-        switch (self.data) {
-            .miner => |*miner| {
-                game.player.add_stack_from_inventory_slot_to_inventory(&miner.input);
-                game.player.add_stack_from_inventory_slot_to_inventory(&miner.output);
-            },
-            .furnace => |*furnace| {
-                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.fuel_input);
-                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.ingredient_input);
-                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.output);
-            }
-        }
-    }
-
-    // update called every tick
-    fn tick_update(self: *Self, game: *const Game) void {
-        switch (self.data) {
-            .miner => |*miner| {
-                if(!miner.valid_placement) return;
-
-                if(miner.fuel_buffer == 0) {
-                    miner.fuel_item_in_use = null;
-                    miner.progress = 0;
-                }
-
-                if(miner.fuel_buffer == 0 and miner.input.count > 0) {
-                    miner.fuel_buffer = miner.input.item_type.?.fuel_smelt_count().? * TileData.miner_max_progress;
-                    miner.fuel_item_in_use = miner.input.item_type;
-                    miner.input.count -= 1;
-                    if(miner.input.count == 0) miner.input.item_type = null;
-                }
-
-                if(miner.fuel_buffer > 0) {
-                    miner.progress += 1;
-                    miner.fuel_buffer -= 1;
-                    if(miner.progress >= TileData.miner_max_progress) {
-                        miner.progress = 0;
-
-                        const tile = game.background_tiles[self.tile_index];
-                        const item = tile.item_when_mined() orelse unreachable; // if this failed there was a logic error before
-                        miner.output.item_type = item;
-                        miner.output.count += 1;
-                    }
-                }
-            },
-            .furnace => |*furnace| {
-                if(furnace.ingredient_input.count == 0) return;
-                if(furnace.output.item_type != null and furnace.ingredient_input.item_type.?.item_when_smelted() != furnace.output.item_type) return;
-
-                if(furnace.fuel_buffer == 0) {
-                    furnace.fuel_item_in_use = null;
-                    furnace.progress = 0;
-                }
-
-                if(furnace.fuel_buffer == 0 and furnace.fuel_input.count > 0) {
-                    furnace.fuel_buffer += furnace.fuel_input.item_type.?.fuel_smelt_count().? * TileData.furnace_max_progress;
-                    furnace.fuel_item_in_use = furnace.fuel_input.item_type;
-                    furnace.fuel_input.count -= 1;
-                    if(furnace.fuel_input.count == 0) furnace.fuel_input.item_type = null;
-                }
-
-                if(furnace.fuel_buffer > 0) {
-                    furnace.progress += 1;
-                    furnace.fuel_buffer -= 1;
-                    if(furnace.progress >= TileData.furnace_max_progress) {
-                        furnace.progress = 0;
-
-                        const output_item = furnace.ingredient_input.item_type.?.item_when_smelted();
-                        furnace.output.item_type = output_item;
-                        furnace.output.count += 1;
-
-                        furnace.ingredient_input.count -= 1;
-                        if(furnace.ingredient_input.count == 0) {
-                            furnace.ingredient_input.item_type = null;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn ctrl_left_click(self: *Self, game: *Game) void {
-        switch (self.data) {
-            .miner => |*miner| {
-                game.player.add_stack_from_inventory_slot_to_inventory(&miner.output);
-            },
-            .furnace => |*furnace| {
-                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.output);
-            }
-        }
-    }
-
-    fn ctrl_right_click(self: *Self, game: *Game) void {
-        switch (self.data) {
-            .miner => |*miner| {
-                if(game.player.get_selected_item_type()) |input_item| {
-                    if(!input_item.can_be_fuel()) return;
-                    game.player.add_stack_from_selected_slot_to_inventory_slot(&miner.input);
-                }
-            },
-            .furnace => |*furnace| {
-                if(game.player.get_selected_item_type()) |input_item| {
-                    if(input_item.can_be_fuel()) {
-                        game.player.add_stack_from_selected_slot_to_inventory_slot(&furnace.fuel_input);
-                    } else if(input_item.can_be_smelted()) {
-                        game.player.add_stack_from_selected_slot_to_inventory_slot(&furnace.ingredient_input);
-                    }
-                }
-            }
-        }
-    }
 };
 
 const Item = enum {
@@ -431,10 +483,11 @@ const Item = enum {
     furnace,
     iron_ingot,
     stone,
+    wood,
 
     fn can_be_fuel(self: *const Self) bool {
         return switch (self.*) {  
-            .coal => true,
+            .coal, .wood => true,
             .miner, .iron, .furnace, .iron_ingot, .stone => false
         };
     }
@@ -442,6 +495,7 @@ const Item = enum {
     fn fuel_smelt_count(self: *const Self) ?i64 {
         return switch (self.*) {  
             .coal => 10,
+            .wood => 5,
             .miner, .iron, .furnace, .iron_ingot, .stone => null
         };
     }
@@ -449,14 +503,14 @@ const Item = enum {
     fn can_be_smelted(self: *const Self) bool {
         return switch (self.*) {  
             .iron => true,
-            .miner, .furnace, .coal, .iron_ingot, .stone => false
+            .miner, .furnace, .coal, .iron_ingot, .stone, .wood => false
         };
     }
 
     fn item_when_smelted(self: *const Self) ?Item {
         return switch (self.*) {  
             .iron => .iron_ingot,
-            .miner, .furnace, .coal, .iron_ingot, .stone => null
+            .miner, .furnace, .coal, .iron_ingot, .stone, .wood => null
         };
     }
 
@@ -467,7 +521,8 @@ const Item = enum {
             .coal => coal_item_texture,
             .furnace => furnace_tile_texture,
             .iron_ingot => iron_ingot_item_texture,
-            .stone => stone_item_texture
+            .stone => stone_item_texture,
+            .wood => wood_item_texture
         };
     }
 
@@ -479,7 +534,7 @@ const Item = enum {
         return switch (self.*) {
             .miner => .miner,
             .furnace => .furnace,
-            .iron, .coal, .iron_ingot, .stone => null,
+            .iron, .coal, .iron_ingot, .stone, .wood => null,
         };
     }
 };
@@ -625,6 +680,7 @@ const Game = struct {
         left_shift: bool
     };
 
+    seed: i32,
     player: Player,
     camera: raylib.Camera2D,
     input: Input,
@@ -645,6 +701,7 @@ const Game = struct {
         }
 
         var game = Game{
+            .seed = 16,
             .player = Player{
                 .x = @divFloor(world_tile_width * tile_width, 2),
                 .y = @divFloor(world_tile_height * tile_height, 2),
@@ -725,7 +782,7 @@ const Game = struct {
 
     fn tick_update(self: *Self) void {
         for(self.tile_data.items) |*tile_data| {
-            tile_data.tick_update(self);
+            self.forground_tiles[tile_data.tile_index].tick_update(tile_data.tile_index, tile_data, self);
         }
     }
 
@@ -768,12 +825,13 @@ const Game = struct {
         }
 
         // camera update
+        const zoom_amount = 0.2;
         if(self.input.up_arrow) {
-            self.camera.zoom += self.camera.zoom * 0.1;
+            self.camera.zoom += self.camera.zoom * zoom_amount;
         }
 
         if(self.input.down_arrow or (self.input.left_shift and self.input.scroll < 0)) {
-            self.camera.zoom -= self.camera.zoom * 0.1;
+            self.camera.zoom -= self.camera.zoom * zoom_amount;
             if(self.camera.zoom <= 0.4) self.camera.zoom = 0.4;
         }
 
@@ -789,15 +847,17 @@ const Game = struct {
 
             const tile_coords = mouse_position_to_tile_position(mouse_position);
             const tile_index = get_tile_index_from_x_and_y(tile_coords.x, tile_coords.y);
+            const tile = self.forground_tiles[tile_index];
+            const tile_data = if (tile.has_tile_data()) self.get_tile_data(tile_index) else null;
 
             if(self.input.right_mouse and !self.input.ctrl) {
                 const current_selected_item = self.player.get_selected_item_type();
                 if(current_selected_item != null) {
                     const items_tile = current_selected_item.?.get_tile_when_placed();
-                    if(items_tile) |tile| {
+                    if(items_tile) |value| {
                         // only pop the item from the inventory when it has an
                         // associated tile type to place
-                        if(self.place_tile_in_foreground(tile_index, tile)) {
+                        if(self.place_tile_in_foreground(tile_index, value)) {
                             _ = self.player.try_pop_selected_item();
                         }
                     }
@@ -807,8 +867,8 @@ const Game = struct {
             if(self.input.left_mouse and !self.input.ctrl) {
                 const removed_tile = self.remove_tile_in_foreground(tile_index);
     
-                if(removed_tile) |tile| {
-                    if(tile.item_when_broken()) |item| {
+                if(removed_tile) |value| {
+                    if(value.item_when_broken()) |item| {
                         // right now if the player has no space in the inventory
                         // we just ignore it and the item vanishes of course
                         // this is not ideal
@@ -818,19 +878,11 @@ const Game = struct {
             }
     
             if(self.input.right_mouse and self.input.ctrl) {
-                const tile_data = self.get_tile_data(tile_index);
-    
-                if(tile_data != null)  {
-                    tile_data.?.ctrl_right_click(self);
-                }
+                tile.ctrl_right_click(tile_index, tile_data, self);
             }
     
             if(self.input.left_mouse and self.input.ctrl) {
-                const tile_data = self.get_tile_data(tile_index);
-    
-                if(tile_data != null)  {
-                    tile_data.?.ctrl_left_click(self);
-                }
+                tile.ctrl_left_click(tile_index, tile_data, self);
             }
         }
     }
@@ -949,9 +1001,9 @@ const Game = struct {
                     draw_inventory_slot(&miner.output, output_slot_x, output_slot_y, size, raylib.RED); // output slot
 
                     const progress_bar_x = output_slot_x + size + padding;
-                    draw_progress_bar_vertical(progress_bar_x, output_slot_y, 8, size, raylib.BLUE, raylib.WHITE, miner.progress, TileData.miner_max_progress);
+                    draw_progress_bar_vertical(progress_bar_x, output_slot_y, 8, size, raylib.BLUE, raylib.WHITE, miner.progress, Tile.miner_max_progress);
                     if(miner.fuel_item_in_use) |fuel_item| {
-                        draw_progress_bar_vertical(progress_bar_x, input_slot_y, 8, size, raylib.RED, raylib.ORANGE, miner.fuel_buffer, fuel_item.fuel_smelt_count().? * TileData.miner_max_progress);
+                        draw_progress_bar_vertical(progress_bar_x, input_slot_y, 8, size, raylib.RED, raylib.ORANGE, miner.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.miner_max_progress);
                     }
                 },
                 .furnace => |*furnace| {
@@ -969,9 +1021,9 @@ const Game = struct {
                     draw_inventory_slot(&furnace.ingredient_input, ingredient_slot_x, input_slot_y, size, raylib.BLUE); // ingredient slot
                     draw_inventory_slot(&furnace.output, output_slot_x, output_slot_y, size, raylib.RED);               // output slot
                
-                    draw_progress_bar_vertical(progress_bar_x, output_slot_y, progress_bar_width, size, raylib.BLUE, raylib.WHITE, furnace.progress, TileData.furnace_max_progress);
+                    draw_progress_bar_vertical(progress_bar_x, output_slot_y, progress_bar_width, size, raylib.BLUE, raylib.WHITE, furnace.progress, Tile.furnace_max_progress);
                     if(furnace.fuel_item_in_use) |fuel_item| {
-                        draw_progress_bar_vertical(progress_bar_x, input_slot_y, progress_bar_width, size, raylib.RED, raylib.ORANGE, furnace.fuel_buffer, fuel_item.fuel_smelt_count().? * TileData.furnace_max_progress);
+                        draw_progress_bar_vertical(progress_bar_x, input_slot_y, progress_bar_width, size, raylib.RED, raylib.ORANGE, furnace.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.furnace_max_progress);
                     }
                 }
             }
@@ -1060,18 +1112,22 @@ const Game = struct {
     // and replaces it with air, if the tile has an associated
     // tile data then that is also removed
     fn remove_tile_in_foreground(self: *Self, tile_index: usize) ?Tile {
+        if(!valid_tile_position(get_x_and_y_from_tile_index(tile_index))) {
+            return null;
+        }
+
         const replcaing_tile = self.forground_tiles[tile_index];
 
         if(replcaing_tile == .air) {
             return null;
         }
 
-        if(replcaing_tile.has_tile_data()) {
-            const tile_data = self.get_tile_data(tile_index) orelse unreachable; // this should never be null
-            tile_data.removed_update(self);
+        const tile_data = self.get_tile_data(tile_index);
+        replcaing_tile.removed_update(tile_index, tile_data, self);
 
+        if(tile_data) |value| {
             for(0..self.tile_data.items.len) |i| {
-                if(self.tile_data.items[i].tile_index == tile_index) {
+                if(self.tile_data.items[i].tile_index == value.tile_index) {
                     _ = self.tile_data.swapRemove(i);
                     break;
                 }
@@ -1104,9 +1160,12 @@ const Game = struct {
                 }
             };
 
-            // right now doing this here but maybe in the future
-            // adding this to an on placed update queue would be better
-            self.tile_data.items[self.tile_data.items.len - 1].placed_update(self);
+        }
+
+        if(tile_data == null) {
+            tile.placed_update(tile_index, null, self);
+        } else {
+            tile.placed_update(tile_index, &self.tile_data.items[self.tile_data.items.len - 1], self);
         }
 
         return true;
@@ -1138,7 +1197,7 @@ const Game = struct {
         for(0..self.background_tiles.len) |i| {
             for(&ore_table) |*ore| {
                 const noise_generator = fastnoise.Noise(f32) {
-                    .seed = 6,
+                    .seed = self.seed,
                     .noise_type = .perlin,
                     .frequency = ore.frequency,
                     .gain = 0.01,
@@ -1159,6 +1218,54 @@ const Game = struct {
                     self.background_tiles[i] = ore.tile;
                     continue;
                 }
+            }
+        }
+
+        // tree generation pass
+        tree_check: for((world_tile_width * 3)..self.forground_tiles.len) |i| {
+            const noise_generator = fastnoise.Noise(f32) {
+                .seed = self.seed,
+                .noise_type = .perlin,
+                .frequency = 0.6,
+                .gain = 0.01,
+                .fractal_type = .fbm,
+                .lacunarity = 0.40,
+                .cellular_distance = .euclidean,
+                .cellular_return = .distance2,
+                .cellular_jitter_mod = 0.88,
+                .octaves = 2
+            };
+
+            var noise = noise_generator.genNoise2D(@floatFromInt(@mod(i, world_tile_width)), @floatFromInt(@divFloor(i, world_tile_width)));
+
+            // normalise noise from -1 to 1 -> 0 to 1
+            noise = (noise + 1) * 0.5;
+
+            const tree_height = 3;
+            const base_tile_position = get_x_and_y_from_tile_index(i);
+
+            if(!(noise < 0.2 and self.background_tiles[i] == .grass)) {
+                continue :tree_check;
+            }
+
+            for(0..tree_height) |j| {
+                const offset_position = TilePosition{.x = base_tile_position.x, .y = base_tile_position.y - j};
+                if(!valid_tile_position(offset_position)) {
+                    continue :tree_check;
+                }
+
+                const checking_tile_index = get_tile_index_from_x_and_y(offset_position.x, offset_position.y);
+                if(self.forground_tiles[checking_tile_index] != .air) {
+                    continue :tree_check;
+                }
+            }
+
+            self.forground_tiles[i] = .tree_base;
+                
+            for(1..tree_height) |j| {
+                const offset_position = TilePosition{.x = base_tile_position.x, .y = base_tile_position.y - j};
+                const tile_index = get_tile_index_from_x_and_y(offset_position.x, offset_position.y);
+                self.forground_tiles[tile_index] = .tree_0;
             }
         }
     }
@@ -1227,7 +1334,7 @@ fn get_tile_index_from_x_and_y(x: usize, y: usize) usize {
     return @as(usize, @intCast((y * world_tile_width) + x));
 }
 
-fn get_x_and_y_from_tile_index(tile_index: usize) struct {x: usize, y: usize} {
+fn get_x_and_y_from_tile_index(tile_index: usize) TilePosition {
         const x = @mod(tile_index, world_tile_width);
         const y = @divFloor(tile_index, world_tile_width); 
         return .{.x = x, .y = y};
@@ -1247,6 +1354,8 @@ pub fn main() !void {
     iron_ore_tile_texture = raylib.LoadTexture(iron_ore_tile_image_path);
     miner_tile_texture = raylib.LoadTexture(miner_tile_image_path);
     coal_ore_tile_texture = raylib.LoadTexture(coal_ore_tile_image_path);
+    tree_base_tile_texture = raylib.LoadTexture(tree_base_image_path);
+    tree_0_tile_texture = raylib.LoadTexture(tree_0_image_path);
 
     // item texture setup
     iron_item_texture = raylib.LoadTexture(iron_item_image_path);
@@ -1255,6 +1364,7 @@ pub fn main() !void {
     furnace_tile_texture = raylib.LoadTexture(furnace_tile_image_path);
     iron_ingot_item_texture = raylib.LoadTexture(iron_ingot_item_image_path);
     stone_item_texture = raylib.LoadTexture(stone_item_image_path);
+    wood_item_texture = raylib.LoadTexture(wood_item_image_path);
 
     var game = try Game.init(allocator);
     game.generate_world();
