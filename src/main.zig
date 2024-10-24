@@ -70,6 +70,39 @@ var iron_ingot_item_texture: raylib.Texture = undefined;
 var stone_item_texture: raylib.Texture = undefined;
 var wood_item_texture: raylib.Texture = undefined;
 
+const CraftingRecipe = struct {
+    const RecipeItem = struct {item: Item, count: usize};
+
+    output: RecipeItem,
+    inputs: [2]RecipeItem,
+    input_count: usize,
+
+    fn empty_item() RecipeItem {
+        return .{.item = .stone, .count = 0};
+    }
+};
+
+const crafting_recipes = [_]CraftingRecipe {
+    // furnace
+    .{
+        .output = .{.item = .furnace, .count = 1},
+        .inputs = [_]CraftingRecipe.RecipeItem{
+            .{.item = .stone, .count = 5},
+            CraftingRecipe.empty_item(),
+        },
+        .input_count = 1,
+    },
+    // miner
+    .{
+        .output = .{.item = .miner, .count = 1},
+        .inputs = [_]CraftingRecipe.RecipeItem{
+            .{.item = .iron, .count = 5},
+            .{.item = .stone, .count = 5},
+        },
+        .input_count = 2,
+    }
+};
+
 const ore_table = [_]struct {
     tile: Tile,
     threshold: f32,
@@ -538,8 +571,25 @@ const Item = enum {
 };
 
 const InventorySlot = struct {
+    const Self = @This();
+
     item_type: ?Item,
-    count: i64
+    count: usize,
+
+    // takes the given amount from the slot
+    // if there is not enough then the slot is
+    // emptied, the actual amount removed is 
+    // returned
+    fn take_amount(self: *Self, count: usize) usize {
+        const amount_taken = if(count > self.count) self.count else count;
+        self.count -= amount_taken;
+
+        if(self.count == 0) {
+            self.item_type = null;
+        }
+
+        return amount_taken;
+    }
 };
 
 const Player = struct {
@@ -550,6 +600,41 @@ const Player = struct {
     inventory:[9]InventorySlot,
     selected_item: usize,
 
+    fn can_craft_recipe(self: *const Self, recipe: *const CraftingRecipe) bool {
+        for(&recipe.inputs) |*input| {
+            var inputs_found: usize = 0;
+
+            for(&self.inventory) |*slot| {
+                if(slot.item_type == input.item)  {
+                    inputs_found += slot.count;  
+                }
+            }
+
+            if(inputs_found < input.count) return false;
+        }
+
+        return true;
+    }
+
+    fn craft_recipe(self: *Self, recipe: *const CraftingRecipe) void {
+        input: 
+        for(&recipe.inputs) |*input| {
+            var inputs_found: usize = 0;
+
+            for(&self.inventory) |*slot| {
+                if(slot.item_type == input.item)  {
+                    const amount_taken = slot.take_amount(input.count - inputs_found);
+                    inputs_found += amount_taken;
+                    if(inputs_found == input.count) {
+                        continue :input;
+                    }
+                }
+            }
+        }
+
+        _ = self.add_item_to_inventory(recipe.output.item, recipe.output.count);
+    }
+
     // used to get the current item that is selected but
     // does not modify the inventory, should be used to
     // check the current state before trying to access
@@ -559,11 +644,15 @@ const Player = struct {
         return if (slot.count == 0) null else slot.item_type;
     }
 
+    fn get_selected_inventory_slot(self: *Self) *InventorySlot {
+        return &self.inventory[self.selected_item];
+    }
+
     // removes one of the current selected item in the
     // inventory, if there is no items in the current slot
     // then null is returned
     fn try_pop_selected_item(self: *Self) ?Item {
-        const slot = &self.inventory[self.selected_item];
+        const slot = self.get_selected_inventory_slot();
         const item = slot.item_type;
         
         if(item == null) {
@@ -574,20 +663,6 @@ const Player = struct {
         if(slot.count == 0) slot.item_type = null;
 
         return item;
-    }
-
-    // removes as much as possible from a given slot with
-    // the max amount given. The actual number of items removed
-    // is returned. If there is no item then 0 is returned
-    fn try_pop_amount_selected_item(self: *Self, max: i64) i64 {
-        const slot = &self.inventory[self.selected_item];
-        if(slot.item_type == null) return 0;
-
-        const removed_amount = if(slot.count > max) max else slot.count;
-        slot.count -= removed_amount;
-        if(slot.count == 0) slot.item_type = null;
-
-        return removed_amount;
     }
 
     // add what is possible to the inventory from a given slot
@@ -619,11 +694,11 @@ const Player = struct {
         // 2. take items from selected slot, with the max being the space left
         // 3 add the number of items taken to the inventory slot
         const space_remaining = max_item_stack - inventory_slot.count;
-        const amount_taken = self.try_pop_amount_selected_item(space_remaining);
+        const amount_taken = self.get_selected_inventory_slot().take_amount(space_remaining);
         inventory_slot.count += amount_taken;
     }
 
-    fn add_item_to_inventory(self: *Self, item: Item, count: i64) i64 {
+    fn add_item_to_inventory(self: *Self, item: Item, count: usize) usize {
         var remaining_count = count;
 
         // first check existing slots that have the same
@@ -958,7 +1033,36 @@ const Game = struct {
                     draw_circle(indicator_x, indicator_y, indicator_radius, raylib.YELLOW);
                 }
             }
-        } 
+        }
+
+        // crafting ui
+        {
+            const padding = 5;
+            const output_icon_size = 50;
+
+            const mouse_screen_position = get_mouse_screen_position();
+
+            for(&crafting_recipes, 0..) |*recipe, _i| {
+                const craftable = self.player.can_craft_recipe(recipe);
+                const color = if(craftable) raylib.GREEN else raylib.RED;
+
+                const i = @as(f32, @floatFromInt(_i));
+                const output_icon_x = padding;
+                const output_icon_y = padding + (output_icon_size * i) + (padding * i);
+
+                draw_crafting_recipe_output(recipe, output_icon_x, output_icon_y, output_icon_size, color);
+
+                if(mouse_screen_position.x >= output_icon_x and mouse_screen_position.x <= output_icon_x + output_icon_size) {
+                    if(mouse_screen_position.y >= output_icon_y and mouse_screen_position.y <= output_icon_y + output_icon_size) {
+                        draw_crafting_recipe_input(recipe, mouse_screen_position.x + 15, mouse_screen_position.y, output_icon_size);
+
+                        if(craftable and self.input.left_mouse) {
+                            self.player.craft_recipe(recipe);
+                        }
+                    }
+                }
+            }
+        }
 
         // ctrl hover ui 
         hover_ui: {
@@ -1241,6 +1345,32 @@ fn draw_inventory_slot(inventory_slot: *const InventorySlot, x: f32, y: f32, siz
     }
 }
 
+fn draw_crafting_recipe_output(recipe: *const CraftingRecipe, x: f32, y: f32, size: f32, tint: raylib.Color) void {
+    const item_texture = recipe.output.item.get_texture();
+
+    draw_texture_tint(item_slot_texture, x, y, size, size, tint);
+    draw_texture(item_texture, x, y, size, size);
+}
+
+fn draw_crafting_recipe_input(recipe: *const CraftingRecipe, x: f32, y: f32, size: f32) void {
+    const padding = 5;
+
+    for(0..recipe.input_count) |_i| {
+        const i = @as(f32, @floatFromInt(_i));
+        const input = &recipe.inputs[_i];
+        const item_texture = input.item.get_texture();
+        const input_x = x + (size * i) + (padding * i);
+
+        draw_texture_tint(item_slot_texture, input_x, y, size, size, raylib.BLUE);
+        draw_texture(item_texture, input_x, y, size, size);
+
+        var text_buffer = std.mem.zeroes([2]u8); 
+        const string = std.fmt.bufPrint(text_buffer[0..], "{}", .{input.count}) catch unreachable;
+        draw_text(string, input_x, y, 20, raylib.WHITE);
+
+    }
+}
+
 fn draw_progress_bar_vertical(x: f32, y: f32, width: f32, max_height: f32, start_color: raylib.Color, end_color: raylib.Color, value: i64, max_value: i64) void {
     const progress =  @as(f32, @floatFromInt(value)) / @as(f32, @floatFromInt(max_value));
     const progress_bar_end_y = y + max_height;
@@ -1294,4 +1424,6 @@ pub fn main() !void {
     var game = try Game.init(allocator);
     game.generate_world();
     game.run();
+
+    std.debug.print("{}\n", .{crafting_recipes.len});
 }
