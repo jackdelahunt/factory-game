@@ -28,8 +28,6 @@ const world_tile_height = 150;
 
 const max_item_stack = 99;
 
-const testing_world_gen = false;
-
 // images paths
 //
 // TILES
@@ -892,10 +890,6 @@ const Game = struct {
         raylib.ClearBackground(raylib.PURPLE);
         raylib.BeginMode2D(self.camera);
 
-        if(testing_world_gen) {
-            self.generate_world();
-        } 
-
         // background tiles
         for(0..self.background_tiles.len) |i| {
             const tile_coords = get_x_and_y_from_tile_index(i);
@@ -1029,75 +1023,6 @@ const Game = struct {
             }
         }
 
-        if(testing_world_gen) {
-            // frequency
-            _ = raygui.GuiSlider(
-                .{.x = 120, .y = 0, .width = 100, .height = 10},
-                "frequency -- left",
-                "right",
-                &self.world_gen_noise.frequency, 0.001, 0.5
-            );
-    
-            // gain
-            _ = raygui.GuiSlider(
-                .{.x = 120, .y = 15, .width = 100, .height = 10},
-                "gain -- left",
-                "right",
-                &self.world_gen_noise.gain, 0.001, 1
-            );
-    
-            // lacunarity
-            _ = raygui.GuiSlider(
-                .{.x = 120, .y = 30, .width = 100, .height = 10},
-                "lacunarity -- left",
-                "right",
-                &self.world_gen_noise.lacunarity, 0.001, 1
-            ); 
-    
-            if(raygui.GuiButton(.{.x = 120, .y = 45, .width = 40, .height = 30}, "simplex") == 1) {
-                self.world_gen_noise.noise_type = .simplex;        
-            }
-    
-            if(raygui.GuiButton(.{.x = 170, .y = 45, .width = 80, .height = 30}, "simplex smooth") == 1) {
-                self.world_gen_noise.noise_type = .simplex_smooth;        
-            }
-    
-            if(raygui.GuiButton(.{.x = 260, .y = 45, .width = 40, .height = 30}, "cellular") == 1) {
-                self.world_gen_noise.noise_type = .cellular;        
-            }
-    
-            if(raygui.GuiButton(.{.x = 310, .y = 45, .width = 40, .height = 30}, "perlin") == 1) {
-                self.world_gen_noise.noise_type = .perlin;        
-            }
-    
-            if(raygui.GuiButton(.{.x = 360, .y = 45, .width = 40, .height = 30}, "cubic") == 1) {
-                self.world_gen_noise.noise_type = .value_cubic;        
-            }
-    
-            if(raygui.GuiButton(.{.x = 410, .y = 45, .width = 40, .height = 30}, "value") == 1) {
-                self.world_gen_noise.noise_type = .value;        
-            }
-    
-            // octaves
-            var octave_value: c_int = @intCast(self.world_gen_noise.octaves);
-            _ = raygui.GuiValueBox(
-                .{.x = 120, .y = 80, .width = 100, .height = 20},
-                "octaves",
-                &octave_value,
-                1, 
-                5,
-                true
-            );
-    
-            self.world_gen_noise.octaves = @intCast(octave_value);
-    
-            if(raygui.GuiButton(.{.x = 120, .y = 105, .width = 40, .height = 30}, "print") == 1) {
-                std.debug.print(
-                    "freq: {d}\ngain {d}\nlacunarity: {d}\nnoise_type: {}\noctaves: {}\n", 
-                    .{self.world_gen_noise.frequency, self.world_gen_noise.gain, self.world_gen_noise.lacunarity, self.world_gen_noise.noise_type, self.world_gen_noise.octaves});
-            }
-        }
-       
         raylib.EndDrawing();
     } 
 
