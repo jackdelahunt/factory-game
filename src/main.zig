@@ -96,7 +96,7 @@ const crafting_recipes = [_]CraftingRecipe {
     .{
         .output = .{.item = .miner, .count = 1},
         .inputs = [_]CraftingRecipe.RecipeItem{
-            .{.item = .iron, .count = 5},
+            .{.item = .iron_ingot, .count = 5},
             .{.item = .stone, .count = 5},
         },
         .input_count = 2,
@@ -173,28 +173,91 @@ fn draw_text(text: []const u8, x: f32, y: f32, font_size: i32, color: raylib.Col
     );
 }
 
-fn draw_texture_tint(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, tint: raylib.Color) void {
+inline fn draw_texture(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32) void {
+    draw_texture_tint(texture, x, y, width, height, raylib.WHITE);
+}
+
+inline fn draw_texture_tint(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, tint: raylib.Color) void {
+    draw_texture_pro(texture, x, y, width, height, 0, tint);
+}
+
+fn draw_texture_pro(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, rotation: f32, tint: raylib.Color) void {
     // Source rectangle (part of the texture to use for drawing)
     const source_rectagle: raylib.Rectangle = .{ .x = 0, .y = 0, .width = @as(f32, @floatFromInt(texture.width)), .height = @as(f32, @floatFromInt(texture.height)) };
 
     // Destination rectangle (screen rectangle where drawing part of texture)
     const destination_rectangle: raylib.Rectangle = .{ .x = x, .y = y, .width = width, .height = height};
 
-    raylib.DrawTexturePro(texture, source_rectagle, destination_rectangle, .{}, 0, tint);
-}
-
-fn draw_texture(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32) void {
-    draw_texture_tint(texture, x, y, width, height, raylib.WHITE);
+    raylib.DrawTexturePro(texture, source_rectagle, destination_rectangle, .{}, rotation, tint);
 }
 
 const TilePosition = struct {
+    const Self = @This();
     x: usize, 
-    y: usize
+    y: usize,
+
+    fn to_world_position(self: *const Self) WorldPosition {
+        return .{
+            .x = @as(f32, @floatFromInt(self.x * tile_width)),
+            .y = @as(f32, @floatFromInt(self.y * tile_height)),
+        };
+    }
 };
 
-const MousePosition = struct {
+const WorldPosition = struct {
+    const Self = @This();
     x: f32, 
-    y: f32
+    y: f32,
+
+    fn to_tile_position(self: *const Self) TilePosition {
+        // used for debuging should be removed at some point
+        if(!self.in_world_bounds()) {
+            std.debug.panic("trying to get world pos when out of bounds: {d} {d}\n", .{self.x, self.y}) ;
+        }
+
+        const x = @divFloor(@as(usize, @intFromFloat(self.x)), tile_width);
+        const y = @divFloor(@as(usize, @intFromFloat(self.y)), tile_height);
+    
+        return .{.x = x, .y = y};
+    }
+
+    fn in_world_bounds(self: *const Self) bool {
+        if(self.x < 0 or self.x > (world_tile_width * tile_width)) return false;
+        if(self.y < 0 or self.y > (world_tile_height * tile_height)) return false;
+
+        return true;
+    }
+};
+
+const Direction = enum(u8){
+    const Self = @This();
+
+    up,
+    down,
+    left,
+    right,
+
+    fn next(self: *Self) void {
+        self.* = switch (self.*) {
+            .up => .right,
+            .right => .down,
+            .down => .left,
+            .left => .up
+        };
+    }
+
+    fn get_rotation(self: Self) f32 {
+        return switch (self) {
+            .up => 180,
+            .right => 270,
+            .down => 0,
+            .left => 90
+        };
+    }
+};
+
+const ForgroundTile = struct {
+    tile: Tile, direction: Direction
 };
 
 const Tile = enum(u8) {
@@ -217,6 +280,13 @@ const Tile = enum(u8) {
         return switch (self.*) {
              .tree_base, .tree_0 => true,
             .air, .grass, .miner, .furnace, .iron_ore, .coal_ore, .stone => false,
+        };
+    }
+
+    fn has_direction(self: *const Self) bool {
+        return switch (self.*) {
+            .furnace => true,
+            .tree_base, .tree_0, .air, .grass, .miner, .iron_ore, .coal_ore, .stone => false,
         };
     }
 
@@ -309,7 +379,7 @@ const Tile = enum(u8) {
                     return;
                 }
 
-                if(game.forground_tiles[above_tile_index].is_tree_tile()) {
+                if(game.forground_tiles[above_tile_index].tile.is_tree_tile()) {
                     const removed_tile = game.remove_tile_in_foreground(above_tile_index);
                     const item = removed_tile.?.item_when_broken();
                     _ = game.player.add_item_to_inventory(item.?, 1);
@@ -599,6 +669,7 @@ const Player = struct {
     y: f32,
     inventory:[9]InventorySlot,
     selected_item: usize,
+    placement_dirction: Direction,
 
     fn can_craft_recipe(self: *const Self, recipe: *const CraftingRecipe) bool {
         for(&recipe.inputs) |*input| {
@@ -742,7 +813,7 @@ const Game = struct {
         a: bool,
         s: bool,
         d: bool,
-        f: bool,
+        r: bool,
         up_arrow: bool,
         down_arrow: bool,
         numbers: [9]bool, // we ignore 0
@@ -758,7 +829,7 @@ const Game = struct {
     camera: raylib.Camera2D,
     input: Input,
     background_tiles: []Tile,
-    forground_tiles: []Tile,
+    forground_tiles: []ForgroundTile,
     tile_data: std.ArrayList(TileData),
     world_gen_noise: fastnoise.Noise(f32),
     allocator: std.mem.Allocator,
@@ -766,11 +837,11 @@ const Game = struct {
 
     fn init(allocator: std.mem.Allocator) !Game {
         const background_tiles = try allocator.alloc(Tile, world_tile_height * world_tile_width);
-        const forground_tiles = try allocator.alloc(Tile, world_tile_height * world_tile_width);
+        const forground_tiles = try allocator.alloc(ForgroundTile, world_tile_height * world_tile_width);
 
         for(0..background_tiles.len) |i| {
             background_tiles[i] = .air;
-            forground_tiles[i] = .air;
+            forground_tiles[i] = .{.tile = .air, .direction = .down};
         }
 
         var game = Game{
@@ -779,7 +850,8 @@ const Game = struct {
                 .x = @divFloor(world_tile_width * tile_width, 2),
                 .y = @divFloor(world_tile_height * tile_height, 2),
                 .inventory = std.mem.zeroes([9]InventorySlot),
-                .selected_item = 0
+                .selected_item = 0,
+                .placement_dirction = .down,
             },
             .camera = .{
                 .target = .{.x = 0, .y = 0}, // gets set to player x and y before first frame rendered
@@ -833,7 +905,7 @@ const Game = struct {
         self.input.a = raylib.IsKeyDown(raylib.KEY_A);
         self.input.s = raylib.IsKeyDown(raylib.KEY_S);
         self.input.d = raylib.IsKeyDown(raylib.KEY_D);
-        self.input.f = raylib.IsKeyPressed(raylib.KEY_F);
+        self.input.r = raylib.IsKeyPressed(raylib.KEY_R);
         self.input.up_arrow = raylib.IsKeyPressed(raylib.KEY_UP);
         self.input.down_arrow = raylib.IsKeyPressed(raylib.KEY_DOWN);
         self.input.numbers[0] = raylib.IsKeyDown(raylib.KEY_ONE);
@@ -855,7 +927,7 @@ const Game = struct {
 
     fn tick_update(self: *Self) void {
         for(self.tile_data.items) |*tile_data| {
-            self.forground_tiles[tile_data.tile_index].tick_update(tile_data.tile_index, tile_data, self);
+            self.forground_tiles[tile_data.tile_index].tile.tick_update(tile_data.tile_index, tile_data, self);
         }
     }
 
@@ -881,6 +953,20 @@ const Game = struct {
 
         if(self.input.d) {
             self.player.x += player_speed * delta_time;
+        }
+
+        if(self.input.r) {
+
+            // only change direction if current slot is a tile
+            // that can be placed and can be rotated
+            const slot = self.player.get_selected_inventory_slot();
+            if(slot.item_type) |item| {
+                if(item.get_tile_when_placed()) |tile| {
+                    if(tile.has_direction()) {
+                        self.player.placement_dirction.next();
+                    }
+                }
+            }
         }
 
         // inventory
@@ -914,13 +1000,13 @@ const Game = struct {
         mouse_update: {
             const mouse_position = self.get_mouse_world_position();
             
-            if(!mouse_in_world_bounds(mouse_position)) {
+            if(!mouse_position.in_world_bounds()) {
                 break :mouse_update;
             }
 
-            const tile_coords = mouse_position_to_tile_position(mouse_position);
+            const tile_coords = mouse_position.to_tile_position();
             const tile_index = get_tile_index_from_x_and_y(tile_coords.x, tile_coords.y);
-            const tile = self.forground_tiles[tile_index];
+            const tile = self.forground_tiles[tile_index].tile;
             const tile_data = if (tile.has_tile_data()) self.get_tile_data(tile_index) else null;
 
             if(self.input.right_mouse and !self.input.ctrl) {
@@ -968,25 +1054,62 @@ const Game = struct {
         // background tiles
         for(0..self.background_tiles.len) |i| {
             const tile_coords = get_x_and_y_from_tile_index(i);
+            const world_position = tile_coords.to_world_position();
+
             const texture = self.background_tiles[i].get_texture();
             if(texture == null) continue;
                 
-            const x_cord = @as(f32, @floatFromInt(tile_coords.x * tile_width));
-            const y_cord = @as(f32, @floatFromInt(tile_coords.y * tile_height));
 
-            draw_texture(texture.?, x_cord, y_cord, tile_width, tile_height);
+            draw_texture(texture.?, world_position.x, world_position.y, tile_width, tile_height);
         }
 
         // foreground tiles
         for(0..self.forground_tiles.len) |i| {
-            const tile_coords = get_x_and_y_from_tile_index(i);
-            const texture = self.forground_tiles[i].get_texture();
+            const tile_position = get_x_and_y_from_tile_index(i);
+            var world_position = tile_position.to_world_position();
+            const forground_tile = self.forground_tiles[i];
+
+            const texture = forground_tile.tile.get_texture();
             if(texture == null) continue;
                 
-            const x_cord = @as(f32, @floatFromInt(tile_coords.x * tile_width));
-            const y_cord = @as(f32, @floatFromInt(tile_coords.y * tile_height));
+            // update draw location based on the rotation
+            // this is because textures are drawn from the 
+            // top left corner
+            if(forground_tile.tile.has_direction()) {
+                world_position = move_draw_location_on_direction(world_position, forground_tile.direction);
+            }
 
-            draw_texture(texture.?, x_cord, y_cord, tile_width, tile_height);
+            draw_texture_pro(texture.?, world_position.x, world_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE);
+        }
+
+        // tile place preview
+        tile_preview: {
+            const mouse_world_position = self.get_mouse_world_position();
+            if(!mouse_world_position.in_world_bounds()) {
+                break :tile_preview;
+            }
+
+            const tile_position = mouse_world_position.to_tile_position();
+            const tile_index = get_tile_index_from_x_and_y(tile_position.x, tile_position.y);
+
+            if(self.forground_tiles[tile_index].tile != .air) {
+                break :tile_preview;
+            }
+            
+            var world_position = tile_position.to_world_position();
+
+            const selected_slot = self.player.get_selected_inventory_slot();
+            if(selected_slot.item_type) |item| {
+                if(item.get_tile_when_placed()) |tile|  {
+                    if(tile.has_direction()) {
+                        world_position = move_draw_location_on_direction(world_position, self.player.placement_dirction);
+                    }
+
+                    const direction = if(tile.has_direction()) self.player.placement_dirction else .down;
+
+                    draw_texture_pro(tile.get_texture().?, world_position.x, world_position.y, tile_width, tile_height, direction.get_rotation(), raylib.Fade(raylib.WHITE, 0.6));
+                }
+            }
         }
 
         // end 2d mode so ui is not in world space
@@ -1007,7 +1130,7 @@ const Game = struct {
 
             for(0..self.player.inventory.len) |i| {
 
-                const color = switch (i) {
+                var color = switch (i) {
                     0 => raylib.RED,
                     1 => raylib.ORANGE,
                     2 => raylib.YELLOW,
@@ -1019,6 +1142,8 @@ const Game = struct {
                     8 => raylib.BLACK,
                     else => unreachable
                 };
+
+                color = raylib.Fade(color, 0.7);
 
                 // adding the i * padding gives the gap
                 const slot_x: f32 = @floatFromInt((size * i) + (i * padding) + padding);
@@ -1044,7 +1169,7 @@ const Game = struct {
 
             for(&crafting_recipes, 0..) |*recipe, _i| {
                 const craftable = self.player.can_craft_recipe(recipe);
-                const color = if(craftable) raylib.GREEN else raylib.RED;
+                const color = if(craftable) raylib.Fade(raylib.GREEN, 0.7) else raylib.Fade(raylib.RED, 0.7);
 
                 const i = @as(f32, @floatFromInt(_i));
                 const output_icon_x = padding;
@@ -1071,15 +1196,15 @@ const Game = struct {
             }
 
             const mouse_world_position = self.get_mouse_world_position();
-            if(!mouse_in_world_bounds(mouse_world_position)) {
+            if(!mouse_world_position.in_world_bounds()) {
                 break :hover_ui;
             }
 
             const mouse_screen_position = get_mouse_screen_position();
 
-            const tile_coords = mouse_position_to_tile_position(mouse_world_position);
+            const tile_coords = mouse_world_position.to_tile_position();
             const tile_index = get_tile_index_from_x_and_y(tile_coords.x, tile_coords.y);
-            const tile = self.forground_tiles[tile_index];
+            const tile = self.forground_tiles[tile_index].tile;
 
             if(!tile.has_tile_data()) {
                 break :hover_ui;
@@ -1130,7 +1255,7 @@ const Game = struct {
         raylib.EndDrawing();
     } 
 
-    fn get_mouse_world_position(self: *const Self) MousePosition {
+    fn get_mouse_world_position(self: *const Self) WorldPosition {
         const screen_position = raylib.GetMousePosition();
         const world_position = raylib.GetScreenToWorld2D(screen_position, self.camera);
     
@@ -1145,7 +1270,7 @@ const Game = struct {
             return null;
         }
 
-        const replcaing_tile = self.forground_tiles[tile_index];
+        const replcaing_tile = self.forground_tiles[tile_index].tile;
 
         if(replcaing_tile == .air) {
             return null;
@@ -1163,7 +1288,7 @@ const Game = struct {
             }
         }
                     
-        self.forground_tiles[tile_index] = .air;
+        self.forground_tiles[tile_index].tile = .air;
         return replcaing_tile;
     }
 
@@ -1171,11 +1296,12 @@ const Game = struct {
     // if the tile is not air *not empty* then it is
     // not places and false is returned
     fn place_tile_in_foreground(self: *Self, tile_index: usize, tile: Tile) bool {
-        if(self.forground_tiles[tile_index] != .air) {
+        if(self.forground_tiles[tile_index].tile != .air) {
             return false;
         }
-            
-        self.forground_tiles[tile_index] = tile;
+        
+        const direction = if(tile.has_direction()) self.player.placement_dirction else .down;
+        self.forground_tiles[tile_index] = .{.tile = tile, .direction = direction};
 
         var tile_data = tile.get_default_tile_data();
         if(tile_data != null) {
@@ -1284,49 +1410,49 @@ const Game = struct {
                 }
 
                 const checking_tile_index = get_tile_index_from_x_and_y(offset_position.x, offset_position.y);
-                if(self.forground_tiles[checking_tile_index] != .air) {
+                if(self.forground_tiles[checking_tile_index].tile != .air) {
                     continue :tree_check;
                 }
             }
 
-            self.forground_tiles[i] = .tree_base;
+            self.forground_tiles[i] = .{.tile = .tree_base, .direction = .down};
                 
             for(1..tree_height) |j| {
                 const offset_position = TilePosition{.x = base_tile_position.x, .y = base_tile_position.y - j};
                 const tile_index = get_tile_index_from_x_and_y(offset_position.x, offset_position.y);
-                self.forground_tiles[tile_index] = .tree_0;
+                self.forground_tiles[tile_index] = .{.tile = .tree_0, .direction = .down};
             }
         }
     }
 };
 
-fn get_mouse_screen_position() MousePosition {
-    const screen_position = raylib.GetMousePosition();
-    return .{.x = screen_position.x, .y = screen_position.y};
+fn move_draw_location_on_direction(world_position: WorldPosition, direction: Direction) WorldPosition {
+    var new_position = world_position;
+    switch (direction) {     
+        .left => {
+            new_position.x += tile_width; 
+        },
+        .up => {
+            new_position.x += tile_width;
+            new_position.y += tile_height;
+        },
+        .right => {
+            new_position.y += tile_height;
+        },
+        .down => {}
+    }
+    
+    return new_position;
 }
 
-fn mouse_position_to_tile_position(position: MousePosition) TilePosition {
-    // used for debuging should be removed at some point
-    if(!mouse_in_world_bounds(position)) {
-        std.debug.panic("trying to get mouse pos when out of bounds, need to check before calling: {d} {d}\n", .{position.x, position.y}) ;
-    }
-
-    const x = @divFloor(@as(usize, @intFromFloat(position.x)), tile_width);
-    const y = @divFloor(@as(usize, @intFromFloat(position.y)), tile_height);
-    
-    return .{.x = x, .y = y};
+fn get_mouse_screen_position() WorldPosition {
+    const screen_position = raylib.GetMousePosition();
+    return .{.x = screen_position.x, .y = screen_position.y};
 }
 
 fn valid_tile_position(position: TilePosition) bool {
     if(position.x > world_tile_width) return false;
     if(position.y > world_tile_height) return false;
-
-    return true;
-}
-
-fn mouse_in_world_bounds(position: MousePosition) bool {
-    if(position.x < 0 or position.x > (world_tile_width * tile_width)) return false;
-    if(position.y < 0 or position.y > (world_tile_height * tile_height)) return false;
 
     return true;
 }
