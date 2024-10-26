@@ -26,20 +26,31 @@ pub fn build(b: *std.Build) void {
         .file = b.path("libs/raygui/raygui.c"),
     });  
 
-    exe.addIncludePath(b.path("libs/raylib/include"));
     exe.addIncludePath(b.path("libs/raygui"));
 
-    exe.addObjectFile(b.path("libs/raylib/lib/libraylib.a"));
-
-    // switch (target.getOsTag()) {
-        // .macos => {
+    switch (target.result.os.tag) {
+        .windows => {
+            exe.addIncludePath(b.path("libs/raylib/windows/include"));
+            exe.addObjectFile(b.path("libs/raylib/windows/lib/libraylib.a"));
+            exe.linkSystemLibrary("winmm");
+            exe.linkSystemLibrary("gdi32");
+        },
+        .macos => {
+            exe.addIncludePath(b.path("libs/raylib/macos/include"));
+            exe.addObjectFile(b.path("libs/raylib/macos/lib/libraylib.a"));
             exe.linkFramework("Foundation");
             exe.linkFramework("Cocoa");
             exe.linkFramework("OpenGL");
             exe.linkFramework("CoreAudio");
             exe.linkFramework("CoreVideo");
             exe.linkFramework("IOKit");
-        // },
+        },
+        else => {},
+    }
+
+    // switch (target.getOsTag()) {
+        // .macos => {
+            //        // },
         // .linux => {
             // exe.addLibraryPath(.{ .path = "/usr/lib" });
             // exe.addIncludePath(.{ .path = "/usr/include" });

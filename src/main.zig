@@ -31,23 +31,23 @@ const max_item_stack = 99;
 // images paths
 //
 // TILES
-const grass_tile_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/grass.png";
-const stone_tile_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/stone.png";
-const iron_ore_tile_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/iron_ore.png";
-const miner_tile_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/miner.png";
-const coal_ore_tile_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/coal_ore.png";
-const furnace_tile_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/furnace.png";
-const tree_base_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/tree_base.png";
-const tree_0_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/tree_0.png";
-const belt_image_path = "/Users/jdelahun/projects/zigraylib/images/tiles/belt.png";
+const grass_tile_image_path = "tiles/grass.png";
+const stone_tile_image_path = "tiles/stone.png";
+const iron_ore_tile_image_path = "tiles/iron_ore.png";
+const miner_tile_image_path = "tiles/miner.png";
+const coal_ore_tile_image_path = "tiles/coal_ore.png";
+const furnace_tile_image_path = "tiles/furnace.png";
+const tree_base_image_path = "tiles/tree_base.png";
+const tree_0_image_path = "tiles/tree_0.png";
+const belt_image_path = "tiles/belt.png";
 
 // ITEMS
-const iron_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/iron.png";
-const item_slot_image_path = "/Users/jdelahun/projects/zigraylib/images/items/item_slot.png";
-const coal_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/coal.png";
-const iron_ingot_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/iron_ingot.png";
-const stone_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/stone.png";
-const wood_item_image_path = "/Users/jdelahun/projects/zigraylib/images/items/wood.png";
+const iron_item_image_path = "items/iron.png";
+const item_slot_image_path = "items/item_slot.png";
+const coal_item_image_path = "items/coal.png";
+const iron_ingot_item_image_path = "items/iron_ingot.png";
+const stone_item_image_path = "items/stone.png";
+const wood_item_image_path = "items/wood.png";
 
 
 // gloabal textures
@@ -1726,33 +1726,54 @@ fn get_x_and_y_from_tile_index(tile_index: usize) TilePosition {
         return .{.x = x, .y = y};
 }
 
+const tile_texture: [9]raylib.Texture = undefined;
+
+fn load_texture(relative_texture_path: []const u8) !raylib.Texture {
+    var base_path_buffer = std.mem.zeroes([std.fs.MAX_PATH_BYTES]u8);
+    
+    const cwd_dir = std.fs.cwd();
+    const base_path = try cwd_dir.realpath(".", base_path_buffer[0..]);
+
+    var texture_path_buffer = std.mem.zeroes([std.fs.MAX_PATH_BYTES]u8);
+    const texture_path = try std.fmt.bufPrint(texture_path_buffer[0..], "{s}/textures/{s}", .{base_path, relative_texture_path});
+
+    std.debug.print("{s} {p}\n", .{texture_path, &texture_path[0]});
+    const texture = raylib.LoadTexture(&texture_path[0]);
+    if(texture.id <= 0) {
+        std.debug.panic("unable to load texture with path {s}\n", .{texture_path});
+    }
+
+    return texture;
+}
+
 pub fn main() !void {
+
     var game_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer game_arena.deinit();
  
     const allocator = game_arena.allocator();
 
     init_raylib("factory game");
- 
+
     // tile texture setup
-    grass_tile_texture = raylib.LoadTexture(grass_tile_image_path);
-    stone_tile_texture = raylib.LoadTexture(stone_tile_image_path);
-    iron_ore_tile_texture = raylib.LoadTexture(iron_ore_tile_image_path);
-    miner_tile_texture = raylib.LoadTexture(miner_tile_image_path);
-    coal_ore_tile_texture = raylib.LoadTexture(coal_ore_tile_image_path);
-    tree_base_tile_texture = raylib.LoadTexture(tree_base_image_path);
-    tree_0_tile_texture = raylib.LoadTexture(tree_0_image_path);
-    belt_tile_texture = raylib.LoadTexture(belt_image_path);
+    grass_tile_texture =        try load_texture(grass_tile_image_path);
+    stone_tile_texture =        try load_texture(stone_tile_image_path);
+    iron_ore_tile_texture =     try load_texture(iron_ore_tile_image_path);
+    miner_tile_texture =        try load_texture(miner_tile_image_path);
+    coal_ore_tile_texture =     try load_texture(coal_ore_tile_image_path);
+    tree_base_tile_texture =    try load_texture(tree_base_image_path);
+    tree_0_tile_texture =       try load_texture(tree_0_image_path);
+    belt_tile_texture =         try load_texture(belt_image_path);
 
 
     // item texture setup
-    iron_item_texture = raylib.LoadTexture(iron_item_image_path);
-    item_slot_texture = raylib.LoadTexture(item_slot_image_path);
-    coal_item_texture = raylib.LoadTexture(coal_item_image_path);
-    furnace_tile_texture = raylib.LoadTexture(furnace_tile_image_path);
-    iron_ingot_item_texture = raylib.LoadTexture(iron_ingot_item_image_path);
-    stone_item_texture = raylib.LoadTexture(stone_item_image_path);
-    wood_item_texture = raylib.LoadTexture(wood_item_image_path);
+    iron_item_texture =         try load_texture(iron_item_image_path);
+    item_slot_texture =         try load_texture(item_slot_image_path);
+    coal_item_texture =         try load_texture(coal_item_image_path);
+    furnace_tile_texture =      try load_texture(furnace_tile_image_path);
+    iron_ingot_item_texture =   try load_texture(iron_ingot_item_image_path);
+    stone_item_texture =        try load_texture(stone_item_image_path);
+    wood_item_texture =         try load_texture(wood_item_image_path);
 
     var game = try Game.init(allocator);
     game.generate_world();
