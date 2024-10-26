@@ -179,15 +179,20 @@ inline fn draw_texture(texture: raylib.Texture, x: f32, y: f32, width: f32, heig
 }
 
 inline fn draw_texture_tint(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, tint: raylib.Color) void {
-    draw_texture_pro(texture, x, y, width, height, 0, tint);
+    draw_texture_pro(texture, x, y, width, height, 0, tint, false);
 }
 
-fn draw_texture_pro(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, rotation: f32, tint: raylib.Color) void {
+fn draw_texture_pro(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, rotation: f32, tint: raylib.Color, centred: bool) void {
     // Source rectangle (part of the texture to use for drawing)
     const source_rectagle: raylib.Rectangle = .{ .x = 0, .y = 0, .width = @as(f32, @floatFromInt(texture.width)), .height = @as(f32, @floatFromInt(texture.height)) };
 
     // Destination rectangle (screen rectangle where drawing part of texture)
-    const destination_rectangle: raylib.Rectangle = .{ .x = x, .y = y, .width = width, .height = height};
+    var destination_rectangle: raylib.Rectangle = .{ .x = x, .y = y, .width = width, .height = height};
+
+    if(centred) {
+        destination_rectangle.x -= width / 2;
+        destination_rectangle.y -= height / 2;
+    }
 
     raylib.DrawTexturePro(texture, source_rectagle, destination_rectangle, .{}, rotation, tint);
 }
@@ -1237,7 +1242,6 @@ const Game = struct {
             const texture = self.background_tiles[i].get_texture();
             if(texture == null) continue;
                 
-
             draw_texture(texture.?, world_position.x, world_position.y, tile_width, tile_height);
         }
 
@@ -1258,29 +1262,41 @@ const Game = struct {
                 rotated_position = move_draw_location_on_direction(world_position, forground_tile.direction);
             }
 
-            draw_texture_pro(texture.?, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE);
+            draw_texture_pro(texture.?, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
 
             if(forground_tile.tile == .belt) {
-                const icon_size = 16;
+                const icon_size = 8;
 
                 // where is the position of the first item, this need to be done because the rotation
                 // of the belt also needs to be taken into account
                 const icon_start_position: WorldPosition = switch (forground_tile.direction) {
-                    .up => .{.x = world_position.x + (tile_width / 2), .y = world_position.y + tile_height + icon_size},
-                    .down => .{.x = world_position.x + (tile_width / 2), .y = world_position.y},
-                    .left => .{.x = world_position.x + tile_width - icon_size, .y = world_position.y + (tile_height / 2)},
-                    .right => .{.x = world_position.x + icon_size, .y = world_position.y + (tile_height / 2)},
+                    .up => .{.x = world_position.x + (tile_width / 2), .y = world_position.y + tile_height - (icon_size / 2)},
+                    .down => .{.x = world_position.x + (tile_width / 2), .y = world_position.y + (icon_size / 2)},
+                    .left => .{.x = world_position.x + tile_width - (icon_size / 2), .y = world_position.y + (tile_height / 2)},
+                    .right => .{.x = world_position.x + (icon_size / 2), .y = world_position.y + (tile_height / 2)},
                 };
 
                 const belt = &self.get_tile_data(i).?.data.belt;
 
-                for(&belt.storage) |*slot| {
+                const icon_x_offset: f32 = (tile_width - icon_size) / belt.storage.len;
+                const icon_y_offset: f32 = (tile_width - icon_size) / belt.storage.len;
+
+                for(&belt.storage, 0..) |*slot, _slot_index| {
                     if(slot.is_empty()) {
                         continue;
                     }
 
+                    const slot_index = @as(f32, @floatFromInt(_slot_index));
+
+                    const draw_position = switch (forground_tile.direction) {
+                        .up => .{.x = icon_start_position.x, .y = world_position.y - (icon_y_offset * slot_index)},
+                        .down => .{.x = icon_start_position.x, .y = world_position.y + (icon_y_offset * slot_index)},
+                        .left => .{.x = icon_start_position.x - (icon_x_offset * slot_index), .y = world_position.y},
+                        .right => .{.x = icon_start_position.x + (icon_x_offset * slot_index), .y = world_position.y},
+                    };
+
                     const item_texture = slot.item_type.?.get_texture();
-                    draw_texture(item_texture, icon_start_position.x, icon_start_position.y, icon_size, icon_size);
+                    draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
                 }
             }
         }
@@ -1311,14 +1327,14 @@ const Game = struct {
 
                     const direction = if(tile.has_direction()) self.player.placement_dirction else .down;
 
-                    draw_texture_pro(tile.get_texture().?, world_position.x, world_position.y, tile_width, tile_height, direction.get_rotation(), raylib.Fade(raylib.WHITE, 0.6));
+                    draw_texture_pro(tile.get_texture().?, world_position.x, world_position.y, tile_width, tile_height, direction.get_rotation(), raylib.Fade(raylib.WHITE, 0.6), false);
                 }
             }
         }
 
         // end 2d mode so ui is not in world space
         raylib.EndMode2D();
-
+        
         // fps text 
         {
             var fps_buffer = std.mem.zeroes([32]u8);
@@ -1726,8 +1742,6 @@ fn get_x_and_y_from_tile_index(tile_index: usize) TilePosition {
         return .{.x = x, .y = y};
 }
 
-const tile_texture: [9]raylib.Texture = undefined;
-
 fn load_texture(relative_texture_path: []const u8) !raylib.Texture {
     var base_path_buffer = std.mem.zeroes([std.fs.MAX_PATH_BYTES]u8);
     
@@ -1737,7 +1751,6 @@ fn load_texture(relative_texture_path: []const u8) !raylib.Texture {
     var texture_path_buffer = std.mem.zeroes([std.fs.MAX_PATH_BYTES]u8);
     const texture_path = try std.fmt.bufPrint(texture_path_buffer[0..], "{s}/textures/{s}", .{base_path, relative_texture_path});
 
-    std.debug.print("{s} {p}\n", .{texture_path, &texture_path[0]});
     const texture = raylib.LoadTexture(&texture_path[0]);
     if(texture.id <= 0) {
         std.debug.panic("unable to load texture with path {s}\n", .{texture_path});
@@ -1778,6 +1791,4 @@ pub fn main() !void {
     var game = try Game.init(allocator);
     game.generate_world();
     game.run();
-
-    std.debug.print("{}\n", .{crafting_recipes.len});
 }
