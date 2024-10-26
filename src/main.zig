@@ -40,6 +40,8 @@ const furnace_tile_image_path = "tiles/furnace.png";
 const tree_base_image_path = "tiles/tree_base.png";
 const tree_0_image_path = "tiles/tree_0.png";
 const belt_image_path = "tiles/belt.png";
+const extractor_image_path = "tiles/extractor.png";
+
 
 // ITEMS
 const iron_item_image_path = "items/iron.png";
@@ -62,6 +64,8 @@ var furnace_tile_texture: raylib.Texture = undefined;
 var tree_base_tile_texture: raylib.Texture = undefined;
 var tree_0_tile_texture: raylib.Texture = undefined;
 var belt_tile_texture: raylib.Texture = undefined;
+var extractor_tile_texture: raylib.Texture = undefined;
+
 
 // ITEMS
 var iron_item_texture: raylib.Texture = undefined;
@@ -312,6 +316,21 @@ const Tile = enum(u8) {
     tree_base,
     tree_0,
     belt,
+    extractor,
+
+    fn extractor_can_take(self: *const Self) bool {
+        return switch (self.*) {
+            .miner => true,
+            else => false,
+        };
+    }
+
+    fn extractor_can_give(self: *const Self) bool {
+        return switch (self.*) {
+            .furnace => true,
+            else => false,
+        };
+    }
 
     // true if the tile can reveive and item from another machine
     // this means adjacent tiles will try and give it items
@@ -331,7 +350,7 @@ const Tile = enum(u8) {
 
     fn has_direction(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .belt => true,
+            .miner, .belt, .extractor => true,
             else => false,
         };
     }
@@ -363,6 +382,7 @@ const Tile = enum(u8) {
             .furnace => .furnace,
             .tree_base, .tree_0 => .wood,
             .belt => .belt,
+            .extractor => .extractor,
             else => null,
         };
     }
@@ -378,13 +398,14 @@ const Tile = enum(u8) {
             .furnace => furnace_tile_texture,
             .tree_base => tree_base_tile_texture,
             .tree_0 => tree_0_tile_texture,
-            .belt => belt_tile_texture
+            .belt => belt_tile_texture,
+            .extractor => extractor_tile_texture
         };
     }
 
     fn has_tile_data(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .belt => true,
+            .miner, .furnace, .belt, .extractor => true,
             else => false,
         };
     }
@@ -469,37 +490,6 @@ const Tile = enum(u8) {
                             miner.output.count += 1;
                         }
                     }
-                }
-
-                transport: { // item transport logic
-                    if(miner.output.is_empty()) {
-                        break :transport;
-                    }
-
-                    const current_direction = game.forground_tiles[tile_index].direction;
-                    const current_position = get_x_and_y_from_tile_index(tile_index);
-                    const target_position = current_position.get_adjacent_tile_at_direction(current_direction.oppisite());
-
-                    if(!valid_tile_position(target_position)) {
-                        break :transport;
-                    }
-                    
-                    const target_index = get_tile_index_from_x_and_y(target_position.x, target_position.y);
-                    const target_tile = game.forground_tiles[target_index].tile;
-                    if(!target_tile.accepts_items_from_machines()) {
-                        break :transport;
-                    }
-
-                    var target_tile_data: ?*TileData = null;  
-
-                    if(target_tile.has_tile_data()) {
-                        target_tile_data = game.get_tile_data(target_index) orelse unreachable; // has_tile_data is true so this needs to not be null
-                    }
-
-                    // should not be null because count is not 0
-                    const output_item = miner.output.item_type orelse unreachable;
-                    const amount_taken = target_tile.accept_input_from_machine(output_item, 1, target_index, target_tile_data, game);
-                    _ = miner.output.take_amount(amount_taken);
                 }
             },
             .furnace => {
@@ -586,8 +576,131 @@ const Tile = enum(u8) {
                     _ = belt.last_slot().take_amount(amount_taken);
                 }
             },
+            .extractor => {
+                const extractor = &tile_data.?.data.extractor;
+
+                const current_position = get_x_and_y_from_tile_index(tile_index);
+                if(!valid_tile_position(current_position)) {
+                    return;
+                }
+
+                const input_direction = game.forground_tiles[tile_index].direction;
+                const output_direction = input_direction.oppisite();
+
+                // check to take item
+                check_input: {
+                    if(extractor.item != null) {
+                        break :check_input;
+                    }
+
+                    const input_position = current_position.get_adjacent_tile_at_direction(input_direction);
+                    if(!valid_tile_position(input_position)) {
+                        break :check_input;
+                    }
+
+                    const input_index = get_tile_index_from_x_and_y(input_position.x, input_position.y);
+                    const input_tile = game.forground_tiles[input_index].tile;
+                    
+                    if(!input_tile.extractor_can_take()) {
+                        break :check_input;
+                    }
+
+                    var input_tile_data: ?*TileData = null;  
+                    if(input_tile.has_tile_data()) {
+                        input_tile_data = game.get_tile_data(input_index) orelse unreachable; // has_tile_data is true so this needs to not be null
+                    }
+
+                    const input_item = input_tile.extractor_take(input_index, input_tile_data, game);
+                    extractor.item = input_item;
+                }
+
+                // check to output item
+                check_output: {
+                    if(extractor.item == null) {
+                        break :check_output;
+                    }
+
+                    const output_position = current_position.get_adjacent_tile_at_direction(output_direction);
+                    if(!valid_tile_position(output_position)) {
+                        break :check_output;
+                    }
+
+                    const output_index = get_tile_index_from_x_and_y(output_position.x, output_position.y);
+                    const output_tile = game.forground_tiles[output_index].tile;
+                    
+                    if(!output_tile.extractor_can_give()) {
+                        break :check_output;
+                    }
+
+                    var output_tile_data: ?*TileData = null;  
+                    if(output_tile.has_tile_data()) {
+                        output_tile_data = game.get_tile_data(output_index) orelse unreachable; // has_tile_data is true so this needs to not be null
+                    }
+
+                    if(output_tile.extractor_give(extractor.item.?, output_index, output_tile_data, game)) {
+                        extractor.item = null;
+                    }
+                }
+            },
             else => {},
         }
+    }
+
+    fn extractor_take(self: Self, tile_index: usize, tile_data: ?*TileData, game: *const Game) ?Item {
+        _ = tile_index; // autofix
+        _ = game; // autofix
+        switch (self) {
+            .miner => {
+                const miner = &tile_data.?.data.miner;
+
+                if(miner.output.is_empty()) {
+                    return null;
+                }
+
+                const output_item = miner.output.item_type;
+                _ = miner.output.take_amount(1);
+                return output_item;
+            },
+            else => {
+                unreachable;
+            }
+        }
+    }
+
+    fn extractor_give(self: Self, item: Item, tile_index: usize, tile_data: ?*TileData, game: *const Game) bool {
+        _ = tile_index; // autofix
+        _ = game; // autofix
+        switch (self) {
+            .furnace => {
+                const furnace = &tile_data.?.data.furnace;
+                
+                var target_slot: *InventorySlot = undefined;
+                if(item.can_be_fuel()) {
+                    target_slot = &furnace.fuel_input;
+                } else if(item.can_be_smelted()) {
+                    target_slot = &furnace.ingredient_input;
+                } else {
+                    return false;
+                }
+                
+                if(target_slot.is_full()) {
+                    return false;
+                }
+
+                if(target_slot.item_type != null and target_slot.item_type != item) {
+                    return false;
+                }
+
+                // set the item as it should be the same or null
+                target_slot.item_type = item;
+                target_slot.count += 1;
+                return true;
+            },
+            else => {
+                unreachable;
+            }
+        }
+
     }
 
     fn accept_input_from_machine(self: Self, item: Item, count: usize, tile_index: usize, tile_data: ?*TileData, game: *const Game) usize {
@@ -703,6 +816,14 @@ const Tile = enum(u8) {
                     },
                 },
             },
+            .extractor => TileData{
+                .tile_index = 0,
+                .data = .{
+                    .extractor =.{
+                        .item = null,
+                    },
+                },
+            },
             else => null,
         };
     }
@@ -748,6 +869,9 @@ const TileData = struct {
                 return &self.storage[self.storage.len - 1];
             }
         },
+        extractor: struct {
+            item: ?Item,
+        },
     },
 };
 
@@ -762,6 +886,7 @@ const Item = enum {
     stone,
     wood,
     belt,
+    extractor,
 
     fn can_be_fuel(self: *const Self) bool {
         return switch (self.*) {  
@@ -802,6 +927,7 @@ const Item = enum {
             .stone => stone_item_texture,
             .wood => wood_item_texture,
             .belt => belt_tile_texture,
+            .extractor => extractor_tile_texture
         };
     }
 
@@ -809,11 +935,12 @@ const Item = enum {
     // is placed, while some tiles drop and item
     // that item cannot be used to place the tile
     // therefore you need to check with this
-    fn get_tile_when_placed(self: *const Self) ?Tile {
+    fn tile_when_placed(self: *const Self) ?Tile {
         return switch (self.*) {
             .miner => .miner,
             .furnace => .furnace,
             .belt => .belt,
+            .extractor => .extractor,
             else => null,
         };
     }
@@ -842,6 +969,10 @@ const InventorySlot = struct {
 
     fn is_empty(self: *const Self) bool {
         return self.item_type == null;
+    }
+
+    fn is_full(self: *const Self) bool {
+        return self.count == max_item_stack;
     }
 };
 
@@ -1064,12 +1195,13 @@ const Game = struct {
 
         // temp adding items to inventory 
         game.player.inventory[0] = .{ .item_type = .miner, .count = 3 };
+        game.player.inventory[1] = .{ .item_type = .extractor, .count = 30 };
         game.player.inventory[2] = .{ .item_type = .coal, .count = 20 };
         game.player.inventory[3] = .{ .item_type = .coal, .count = 20 };
         game.player.inventory[4] = .{ .item_type = .furnace, .count = 10 };
         game.player.inventory[5] = .{ .item_type = .stone, .count = 10 };
         game.player.inventory[6] = .{ .item_type = .belt, .count = 30 };
-
+        
         return game;
     }
 
@@ -1144,7 +1276,7 @@ const Game = struct {
             // that can be placed and can be rotated
             const slot = self.player.get_selected_inventory_slot();
             if(slot.item_type) |item| {
-                if(item.get_tile_when_placed()) |tile| {
+                if(item.tile_when_placed()) |tile| {
                     if(tile.has_direction()) {
                         self.player.placement_dirction.next();
                     }
@@ -1195,7 +1327,7 @@ const Game = struct {
             if(self.input.right_mouse and !self.input.ctrl) {
                 const current_selected_item = self.player.get_selected_item_type();
                 if(current_selected_item != null) {
-                    const items_tile = current_selected_item.?.get_tile_when_placed();
+                    const items_tile = current_selected_item.?.tile_when_placed();
                     if(items_tile) |value| {
                         // only pop the item from the inventory when it has an
                         // associated tile type to place
@@ -1320,7 +1452,7 @@ const Game = struct {
 
             const selected_slot = self.player.get_selected_inventory_slot();
             if(selected_slot.item_type) |item| {
-                if(item.get_tile_when_placed()) |tile|  {
+                if(item.tile_when_placed()) |tile|  {
                     if(tile.has_direction()) {
                         world_position = move_draw_location_on_direction(world_position, self.player.placement_dirction);
                     }
@@ -1470,6 +1602,7 @@ const Game = struct {
                     }
                 },
                 .belt => {},
+                .extractor => {},
             }
         }
 
@@ -1777,7 +1910,7 @@ pub fn main() !void {
     tree_base_tile_texture =    try load_texture(tree_base_image_path);
     tree_0_tile_texture =       try load_texture(tree_0_image_path);
     belt_tile_texture =         try load_texture(belt_image_path);
-
+    extractor_tile_texture =    try load_texture(extractor_image_path);
 
     // item texture setup
     iron_item_texture =         try load_texture(iron_item_image_path);
