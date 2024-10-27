@@ -336,6 +336,8 @@ const Tile = enum(u8) {
     const furnace_max_progress  = 10 * 3;
     const pipe_max_progress     = 30 * 1;
 
+    const pipe_to_slot_count_cutoff = 5;
+
     air,
     grass,
     stone,
@@ -350,7 +352,7 @@ const Tile = enum(u8) {
 
     fn extractor_can_take(self: *const Self) bool {
         return switch (self.*) {
-            .miner => true,
+            .miner, .pipe => true,
             else => false,
         };
     }
@@ -510,9 +512,15 @@ const Tile = enum(u8) {
                     }
 
                     const target_index = get_tile_index_from_x_and_y(target.position.x, target.position.y);
-                    if(game.forground_tiles[target_index].tile == .pipe) {
-                        pipe.relative_output_direction = target.relative_direction;
-                        return;
+                    const target_tile = game.forground_tiles[target_index];
+                    if(target_tile.tile == .pipe) {
+                        // cehck if the tile the pipe has the input from is
+                        // the current tile, then we can point at it
+                        const target_tile_input_tile_position = target.position.get_adjacent_tile_at_direction(target_tile.direction);
+                        if(position.x == target_tile_input_tile_position.x and position.y == target_tile_input_tile_position.y) {
+                            pipe.relative_output_direction = target.relative_direction;
+                            return;
+                        }
                     }
                 }
             },
@@ -711,6 +719,22 @@ const Tile = enum(u8) {
                 _ = miner.output.take_amount(1);
                 return output_item;
             },
+            .pipe => {
+                const pipe = &tile_data.?.data.pipe;
+
+                var item: ?Item = null;
+                
+                for(&pipe.storage) |*slot| {
+                    if(slot.item != null) {
+                        item = slot.item;
+                        slot.progress = 0;
+                        slot.item = null;
+                        return item;
+                    }
+                }
+
+                return item;
+            },
             else => {
                 unreachable;
             }
@@ -731,7 +755,7 @@ const Tile = enum(u8) {
                     return false;
                 }
                 
-                if(target_slot.is_full()) {
+                if(target_slot.is_full() or target_slot.count >= Tile.pipe_to_slot_count_cutoff) {
                     return false;
                 }
 
@@ -1267,13 +1291,13 @@ const Game = struct {
         };
 
         // temp adding items to inventory 
-        game.player.inventory[0] = .{ .item_type = .miner, .count = 3 };
-        game.player.inventory[1] = .{ .item_type = .extractor, .count = 30 };
-        game.player.inventory[2] = .{ .item_type = .pipe, .count = 30 };
-        game.player.inventory[3] = .{ .item_type = .coal, .count = 20 };
-        game.player.inventory[4] = .{ .item_type = .coal, .count = 20 };
-        game.player.inventory[5] = .{ .item_type = .furnace, .count = 10 };
-        game.player.inventory[6] = .{ .item_type = .stone, .count = 10 };
+        game.player.inventory[0] = .{ .item_type = .miner, .count = 99 };
+        game.player.inventory[1] = .{ .item_type = .extractor, .count = 99 };
+        game.player.inventory[2] = .{ .item_type = .pipe, .count = 99 };
+        game.player.inventory[3] = .{ .item_type = .coal, .count = 99 };
+        game.player.inventory[4] = .{ .item_type = .coal, .count = 99 };
+        game.player.inventory[5] = .{ .item_type = .furnace, .count = 99 };
+        game.player.inventory[6] = .{ .item_type = .stone, .count = 99 };
         
         return game;
     }
