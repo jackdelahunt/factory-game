@@ -39,7 +39,6 @@ const coal_ore_tile_image_path = "tiles/coal_ore.png";
 const furnace_tile_image_path = "tiles/furnace.png";
 const tree_base_image_path = "tiles/tree_base.png";
 const tree_0_image_path = "tiles/tree_0.png";
-const belt_image_path = "tiles/belt.png";
 const extractor_image_path = "tiles/extractor.png";
 const pipe_image_path = "tiles/pipe.png";
 const pipe_left_image_path = "tiles/pipe_left.png";
@@ -65,7 +64,6 @@ var coal_ore_tile_texture: raylib.Texture = undefined;
 var furnace_tile_texture: raylib.Texture = undefined;
 var tree_base_tile_texture: raylib.Texture = undefined;
 var tree_0_tile_texture: raylib.Texture = undefined;
-var belt_tile_texture: raylib.Texture = undefined;
 var extractor_tile_texture: raylib.Texture = undefined;
 var pipe_tile_texture: raylib.Texture = undefined;
 var pipe_left_tile_texture: raylib.Texture = undefined;
@@ -336,7 +334,7 @@ const Tile = enum(u8) {
 
     const miner_max_progress    = 10 * 3;
     const furnace_max_progress  = 10 * 3;
-    const pipe_max_progress     = 10 * 1;
+    const pipe_max_progress     = 30 * 1;
 
     air,
     grass,
@@ -591,7 +589,7 @@ const Tile = enum(u8) {
 
                 { // progress items in the pipe
                     for(&pipe.storage) |*slot| {
-                        if(slot.item != null) {
+                        if(slot.item != null and slot.progress < pipe_max_progress) {
                             slot.progress += 1;
                         }
                     }
@@ -1470,6 +1468,46 @@ const Game = struct {
                 rotated_position = move_draw_location_on_direction(world_position, forground_tile.direction);
             }
 
+            special_pipe_render: {
+                if(forground_tile.tile == .pipe) {
+                    const icon_size = 12;
+    
+                    const pipe = &self.get_tile_data(i).?.data.pipe;
+    
+                    // only drawing items for straight pipes
+                    if(pipe.relative_output_direction != .up) {
+                        break :special_pipe_render;
+                    }
+    
+                    // where is the position of the first item, this need to be done because the rotation
+                    // of the belt also needs to be taken into account
+                    const icon_start_position: WorldPosition = switch (forground_tile.direction) {
+                        .up => .{.x = world_position.x + (tile_width / 2), .y = world_position.y},
+                        .down => .{.x = world_position.x + (tile_width / 2), .y = world_position.y + tile_height},
+                        .left => .{.x = world_position.x, .y = world_position.y + (tile_height / 2)},
+                        .right => .{.x = world_position.x + tile_width, .y = world_position.y + (tile_height / 2)},
+                    };
+
+                    for(&pipe.storage) |*slot| {
+                        if(slot.item == null) {
+                            continue;
+                        }
+    
+                        const offset_based_on_progress = (@as(f32, @floatFromInt(slot.progress)) / @as(f32, @floatFromInt(Tile.pipe_max_progress))) * tile_width;
+    
+                        const draw_position = switch (forground_tile.direction) {
+                            .up => .{.x = icon_start_position.x, .y = icon_start_position.y + offset_based_on_progress},
+                            .down => .{.x = icon_start_position.x, .y = icon_start_position.y - offset_based_on_progress},
+                            .left => .{.x = icon_start_position.x + offset_based_on_progress, .y = icon_start_position.y},
+                            .right => .{.x = icon_start_position.x - offset_based_on_progress, .y = icon_start_position.y},
+                        };
+    
+                        const item_texture = slot.item.?.get_texture();
+                        draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
+                    }
+                }
+            }
+
             draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
         }
 
@@ -1978,7 +2016,6 @@ pub fn main() !void {
     coal_ore_tile_texture =     try load_texture(coal_ore_tile_image_path);
     tree_base_tile_texture =    try load_texture(tree_base_image_path);
     tree_0_tile_texture =       try load_texture(tree_0_image_path);
-    belt_tile_texture =         try load_texture(belt_image_path);
     extractor_tile_texture =    try load_texture(extractor_image_path);
     pipe_tile_texture =         try load_texture(pipe_image_path);
     pipe_left_tile_texture =    try load_texture(pipe_left_image_path);
