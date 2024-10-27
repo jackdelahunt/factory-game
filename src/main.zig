@@ -41,7 +41,9 @@ const tree_base_image_path = "tiles/tree_base.png";
 const tree_0_image_path = "tiles/tree_0.png";
 const belt_image_path = "tiles/belt.png";
 const extractor_image_path = "tiles/extractor.png";
-
+const pipe_image_path = "tiles/pipe.png";
+const pipe_left_image_path = "tiles/pipe_left.png";
+const pipe_right_image_path = "tiles/pipe_right.png";
 
 // ITEMS
 const iron_item_image_path = "items/iron.png";
@@ -65,7 +67,9 @@ var tree_base_tile_texture: raylib.Texture = undefined;
 var tree_0_tile_texture: raylib.Texture = undefined;
 var belt_tile_texture: raylib.Texture = undefined;
 var extractor_tile_texture: raylib.Texture = undefined;
-
+var pipe_tile_texture: raylib.Texture = undefined;
+var pipe_left_tile_texture: raylib.Texture = undefined;
+var pipe_right_tile_texture: raylib.Texture = undefined;
 
 // ITEMS
 var iron_item_texture: raylib.Texture = undefined;
@@ -294,6 +298,33 @@ const Direction = enum(u8){
             .left => .right
         };
     }
+
+    fn clockwise(self: Self) Direction {
+        return switch (self) {
+            .up => .right,
+            .right => .down,
+            .down => .left,
+            .left => .up
+        };
+    }
+
+    fn counter_clockwise(self: Self) Direction {
+        return switch (self) {
+            .up => .left,
+            .right => .up,
+            .down => .right,
+            .left => .down
+        };
+    }
+
+    fn relative(self: Self, relative_direction: Direction) Direction {
+        return switch (relative_direction) {
+            .up => self.oppisite(),
+            .right => self.counter_clockwise(),
+            .down => self,
+            .left => self.clockwise()
+        };
+    }
 };
 
 const ForgroundTile = struct {
@@ -303,8 +334,9 @@ const ForgroundTile = struct {
 const Tile = enum(u8) {
     const Self = @This();
 
-    const miner_max_progress = 30; // 3 seconds
-    const furnace_max_progress = 30; // 3 seconds
+    const miner_max_progress    = 10 * 3;
+    const furnace_max_progress  = 10 * 3;
+    const pipe_max_progress     = 10 * 1;
 
     air,
     grass,
@@ -315,7 +347,7 @@ const Tile = enum(u8) {
     furnace,
     tree_base,
     tree_0,
-    belt,
+    pipe,
     extractor,
 
     fn extractor_can_take(self: *const Self) bool {
@@ -325,18 +357,10 @@ const Tile = enum(u8) {
         };
     }
 
-    fn extractor_can_give(self: *const Self) bool {
+    fn pipe_can_give(self: *const Self) bool {
         return switch (self.*) {
             .furnace => true,
-            else => false,
-        };
-    }
-
-    // true if the tile can reveive and item from another machine
-    // this means adjacent tiles will try and give it items
-    fn accepts_items_from_machines(self: *const Self) bool {
-        return switch (self.*) {
-            .belt => true,
+            .pipe => true,
             else => false,
         };
     }
@@ -350,7 +374,7 @@ const Tile = enum(u8) {
 
     fn has_direction(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .belt, .extractor => true,
+            .miner, .pipe, .extractor => true,
             else => false,
         };
     }
@@ -381,15 +405,30 @@ const Tile = enum(u8) {
             .miner => .miner,
             .furnace => .furnace,
             .tree_base, .tree_0 => .wood,
-            .belt => .belt,
+            .pipe => .pipe,
             .extractor => .extractor,
             else => null,
         };
     }
 
-    fn get_texture(self: *const Self) ?raylib.Texture {
+    fn get_texture(self: *const Self, tile_index: usize, game: *const Game) raylib.Texture {
         return switch (self.*) {
-            .air => null,
+            .pipe => {
+                const pipe = &game.get_tile_data(tile_index).?.data.pipe;
+                return switch (pipe.relative_output_direction) {
+                    .up => pipe_tile_texture,
+                    .left => pipe_left_tile_texture,
+                    .right => pipe_right_tile_texture,
+                    .down => unreachable
+                };
+            },
+            else => self.get_default_texture()
+        };
+    }
+
+    fn get_default_texture(self: *const Self) raylib.Texture {
+        return switch (self.*) {
+            .air => std.debug.panic("tried to get texture of air...\n", .{}),
             .grass => grass_tile_texture,
             .stone => stone_tile_texture,
             .iron_ore => iron_ore_tile_texture,
@@ -398,27 +437,16 @@ const Tile = enum(u8) {
             .furnace => furnace_tile_texture,
             .tree_base => tree_base_tile_texture,
             .tree_0 => tree_0_tile_texture,
-            .belt => belt_tile_texture,
+            .pipe => pipe_tile_texture,
             .extractor => extractor_tile_texture
         };
     }
 
     fn has_tile_data(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .belt, .extractor => true,
+            .miner, .furnace, .pipe, .extractor => true,
             else => false,
         };
-    }
-
-    // update called when a player places this tile
-    fn placed_update(self: Self, tile_index: usize, tile_data: ?*TileData, game: *const Game) void {
-        switch (self) {
-            .miner => {
-                var miner = &tile_data.?.data.miner;
-                miner.valid_placement = game.background_tiles[tile_index].can_be_mined();
-            },
-            else => {},
-        }
     }
 
     // update called when the player removes this tile,
@@ -458,6 +486,42 @@ const Tile = enum(u8) {
             else => {},
         }
     }
+
+    fn tile_update(self: Self, tile_index: usize, tile_data: ?*TileData, game: *Game) void {
+        switch (self) {
+            .miner => {
+                var miner = &tile_data.?.data.miner;
+                miner.valid_placement = game.background_tiles[tile_index].can_be_mined();
+            },
+            .pipe => {
+                const pipe = &tile_data.?.data.pipe;
+                
+                const position = get_x_and_y_from_tile_index(tile_index);
+                const current_direction = game.forground_tiles[tile_index].direction;
+
+                const targets = [_]struct {position: TilePosition, relative_direction: Direction} {
+                    .{.position = position.get_adjacent_tile_at_direction(current_direction.relative(pipe.relative_output_direction)), .relative_direction = pipe.relative_output_direction},
+                    .{.position = position.get_adjacent_tile_at_direction(current_direction.oppisite()), .relative_direction = .up},
+                    .{.position = position.get_adjacent_tile_at_direction(current_direction.clockwise()), .relative_direction = .left},
+                    .{.position = position.get_adjacent_tile_at_direction(current_direction.counter_clockwise()), .relative_direction = .right}
+                };
+
+                for(&targets) |*target| {
+                    if(!valid_tile_position(target.position)) {
+                        continue;
+                    }
+
+                    const target_index = get_tile_index_from_x_and_y(target.position.x, target.position.y);
+                    if(game.forground_tiles[target_index].tile == .pipe) {
+                        pipe.relative_output_direction = target.relative_direction;
+                        return;
+                    }
+                }
+            },
+            else => {}
+        }
+    }
+
 
     // update called every tick
     fn tick_update(self: Self, tile_index: usize, tile_data: ?*TileData, game: *const Game) void {
@@ -522,58 +586,46 @@ const Tile = enum(u8) {
                     }
                 }
             },
-            .belt => {
-                const belt = &tile_data.?.data.belt;
+            .pipe => {
+                const pipe = &tile_data.?.data.pipe;
 
-                { // move the items through the belt
-                    var slot_index = belt.storage.len - 1; // start from last slot
-                    while(slot_index != 0) : (slot_index -= 1) {
-                        const slot = &belt.storage[slot_index];
-                        if(!slot.is_empty()) {
-                            continue;
+                { // progress items in the pipe
+                    for(&pipe.storage) |*slot| {
+                        if(slot.item != null) {
+                            slot.progress += 1;
                         }
-
-                        const previous_slot = &belt.storage[slot_index - 1] ;
-                        if(previous_slot.is_empty()) {
-                            continue; 
-                        }
-
-                        slot.item_type = previous_slot.item_type;
-                        slot.count = 1;
-                        previous_slot.count = 0;
-                        previous_slot.item_type = null;
                     }
                 }
 
-                transport: { // item transport logic
-                    if(belt.last_is_empty()) {
-                        break :transport;
-                    }
-
-                    const current_direction = game.forground_tiles[tile_index].direction;
+                // check to output items
+                check_output: {
                     const current_position = get_x_and_y_from_tile_index(tile_index);
-                    const target_position = current_position.get_adjacent_tile_at_direction(current_direction);
-
-                    if(!valid_tile_position(target_position)) {
-                        break :transport;
+                    const output_direction = game.forground_tiles[tile_index].direction.relative(pipe.relative_output_direction);
+                    const output_position = current_position.get_adjacent_tile_at_direction(output_direction);
+                    if(!valid_tile_position(output_position)) {
+                        break :check_output;
                     }
+
+                    const output_index = get_tile_index_from_x_and_y(output_position.x, output_position.y);
+                    const output_tile = game.forground_tiles[output_index].tile;
                     
-                    const target_index = get_tile_index_from_x_and_y(target_position.x, target_position.y);
-                    const target_tile = game.forground_tiles[target_index].tile;
-                    if(!target_tile.accepts_items_from_machines()) {
-                        break :transport;
+                    if(!output_tile.pipe_can_give()) {
+                        break :check_output;
                     }
 
-                    var target_tile_data: ?*TileData = null;  
-
-                    if(target_tile.has_tile_data()) {
-                        target_tile_data = game.get_tile_data(target_index) orelse unreachable; // has_tile_data is true so this needs to not be null
+                    var output_tile_data: ?*TileData = null;  
+                    if(output_tile.has_tile_data()) {
+                        output_tile_data = game.get_tile_data(output_index) orelse unreachable; // has_tile_data is true so this needs to not be null
                     }
 
-                    // should not be null because count is not 0
-                    const output_item = belt.last_slot().item_type orelse unreachable;
-                    const amount_taken = target_tile.accept_input_from_machine(output_item, 1, target_index, target_tile_data, game);
-                    _ = belt.last_slot().take_amount(amount_taken);
+                    for(&pipe.storage) |*slot| {
+                        if(slot.progress >= Tile.pipe_max_progress) {
+                            if(output_tile.pipe_give(slot.item.?, tile_index, output_index, output_tile_data, game)) {
+                                slot.item = null;
+                                slot.progress = 0;
+                            }        
+                        }
+                    }
                 }
             },
             .extractor => {
@@ -628,7 +680,7 @@ const Tile = enum(u8) {
                     const output_index = get_tile_index_from_x_and_y(output_position.x, output_position.y);
                     const output_tile = game.forground_tiles[output_index].tile;
                     
-                    if(!output_tile.extractor_can_give()) {
+                    if(!output_tile.pipe_can_give()) {
                         break :check_output;
                     }
 
@@ -637,7 +689,7 @@ const Tile = enum(u8) {
                         output_tile_data = game.get_tile_data(output_index) orelse unreachable; // has_tile_data is true so this needs to not be null
                     }
 
-                    if(output_tile.extractor_give(extractor.item.?, output_index, output_tile_data, game)) {
+                    if(output_tile.pipe_give(extractor.item.?, tile_index, output_index, output_tile_data, game)) {
                         extractor.item = null;
                     }
                 }
@@ -667,9 +719,7 @@ const Tile = enum(u8) {
         }
     }
 
-    fn extractor_give(self: Self, item: Item, tile_index: usize, tile_data: ?*TileData, game: *const Game) bool {
-        _ = tile_index; // autofix
-        _ = game; // autofix
+    fn pipe_give(self: Self, item: Item, from_index: usize, tile_index: usize, tile_data: ?*TileData, game: *const Game) bool {
         switch (self) {
             .furnace => {
                 const furnace = &tile_data.?.data.furnace;
@@ -695,6 +745,26 @@ const Tile = enum(u8) {
                 target_slot.item_type = item;
                 target_slot.count += 1;
                 return true;
+            },
+            .pipe => {
+                const pipe = &tile_data.?.data.pipe;
+
+                const current_position = get_x_and_y_from_tile_index(tile_index);
+                const from_position = get_x_and_y_from_tile_index(from_index);
+                const input_position = current_position.get_adjacent_tile_at_direction(game.forground_tiles[tile_index].direction);
+
+                // if the position that our input is facing is not the same as where the pipe
+                // that is trying to give us input is then do not accept
+                if(input_position.x != from_position.x or input_position.y != from_position.y) return false;
+
+                for(&pipe.storage) |*slot| {
+                    if(slot.item == null) {
+                        slot.item = item;
+                        return true;
+                    }
+                }
+
+                return false;
             },
             else => {
                 unreachable;
@@ -808,11 +878,12 @@ const Tile = enum(u8) {
                     }
                 },
             },
-            .belt => TileData{
+            .pipe => TileData{
                 .tile_index = 0,
                 .data = .{
-                    .belt = .{
-                        .storage = std.mem.zeroes([5]InventorySlot),
+                    .pipe = .{
+                        .storage = std.mem.zeroes([5]PipeStorageSlot),
+                        .relative_output_direction = .up,
                     },
                 },
             },
@@ -827,6 +898,11 @@ const Tile = enum(u8) {
             else => null,
         };
     }
+};
+
+const PipeStorageSlot = struct {
+    item: ?Item,
+    progress: i64
 };
 
 const TileData = struct {
@@ -854,19 +930,18 @@ const TileData = struct {
             progress: i64,          // amount of ticks used for current item   
             fuel_buffer: i64,       // amount of ticks remaining until fuel is over
         },
-        belt: struct{
-            storage: [5]InventorySlot,
+        pipe: struct{
+            storage: [5]PipeStorageSlot,
+            relative_output_direction: Direction,
 
-            fn first_is_empty(self: *const @This()) bool {
-                return self.storage[0].is_empty();
-            }
+            fn get_empty_slot(self: *const @This()) ?usize {
+                for(&self.storage, 0..) |*slot, i| {
+                    if(slot.item == null) {
+                        return i;
+                    }
+                }
 
-            fn last_is_empty(self: *const @This()) bool {
-                return self.storage[self.storage.len - 1].is_empty();
-            }
-
-            fn last_slot(self: *@This()) *InventorySlot {
-                return &self.storage[self.storage.len - 1];
+                return null;
             }
         },
         extractor: struct {
@@ -885,7 +960,7 @@ const Item = enum {
     iron_ingot,
     stone,
     wood,
-    belt,
+    pipe,
     extractor,
 
     fn can_be_fuel(self: *const Self) bool {
@@ -926,7 +1001,7 @@ const Item = enum {
             .iron_ingot => iron_ingot_item_texture,
             .stone => stone_item_texture,
             .wood => wood_item_texture,
-            .belt => belt_tile_texture,
+            .pipe => pipe_tile_texture,
             .extractor => extractor_tile_texture
         };
     }
@@ -939,7 +1014,7 @@ const Item = enum {
         return switch (self.*) {
             .miner => .miner,
             .furnace => .furnace,
-            .belt => .belt,
+            .pipe => .pipe,
             .extractor => .extractor,
             else => null,
         };
@@ -1196,11 +1271,11 @@ const Game = struct {
         // temp adding items to inventory 
         game.player.inventory[0] = .{ .item_type = .miner, .count = 3 };
         game.player.inventory[1] = .{ .item_type = .extractor, .count = 30 };
-        game.player.inventory[2] = .{ .item_type = .coal, .count = 20 };
+        game.player.inventory[2] = .{ .item_type = .pipe, .count = 30 };
         game.player.inventory[3] = .{ .item_type = .coal, .count = 20 };
-        game.player.inventory[4] = .{ .item_type = .furnace, .count = 10 };
-        game.player.inventory[5] = .{ .item_type = .stone, .count = 10 };
-        game.player.inventory[6] = .{ .item_type = .belt, .count = 30 };
+        game.player.inventory[4] = .{ .item_type = .coal, .count = 20 };
+        game.player.inventory[5] = .{ .item_type = .furnace, .count = 10 };
+        game.player.inventory[6] = .{ .item_type = .stone, .count = 10 };
         
         return game;
     }
@@ -1371,20 +1446,21 @@ const Game = struct {
             const tile_coords = get_x_and_y_from_tile_index(i);
             const world_position = tile_coords.to_world_position();
 
-            const texture = self.background_tiles[i].get_texture();
-            if(texture == null) continue;
-                
-            draw_texture(texture.?, world_position.x, world_position.y, tile_width, tile_height);
+            const texture = self.background_tiles[i].get_default_texture();
+            draw_texture(texture, world_position.x, world_position.y, tile_width, tile_height);
         }
 
         // foreground tiles
         for(0..self.forground_tiles.len) |i| {
             const tile_position = get_x_and_y_from_tile_index(i);
             const world_position = tile_position.to_world_position();
+            
             const forground_tile = self.forground_tiles[i];
+            if(forground_tile.tile == .air) {
+                continue;
+            }
 
-            const texture = forground_tile.tile.get_texture();
-            if(texture == null) continue;
+            const texture = forground_tile.tile.get_texture(i, self);
                 
             // update draw location based on the rotation
             // this is because textures are drawn from the 
@@ -1394,45 +1470,8 @@ const Game = struct {
                 rotated_position = move_draw_location_on_direction(world_position, forground_tile.direction);
             }
 
-            draw_texture_pro(texture.?, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
-
-            if(forground_tile.tile == .belt) {
-                const icon_size = 8;
-
-                // where is the position of the first item, this need to be done because the rotation
-                // of the belt also needs to be taken into account
-                const icon_start_position: WorldPosition = switch (forground_tile.direction) {
-                    .up => .{.x = world_position.x + (tile_width / 2), .y = world_position.y + tile_height - (icon_size / 2)},
-                    .down => .{.x = world_position.x + (tile_width / 2), .y = world_position.y + (icon_size / 2)},
-                    .left => .{.x = world_position.x + tile_width - (icon_size / 2), .y = world_position.y + (tile_height / 2)},
-                    .right => .{.x = world_position.x + (icon_size / 2), .y = world_position.y + (tile_height / 2)},
-                };
-
-                const belt = &self.get_tile_data(i).?.data.belt;
-
-                const icon_x_offset: f32 = (tile_width - icon_size) / belt.storage.len;
-                const icon_y_offset: f32 = (tile_width - icon_size) / belt.storage.len;
-
-                for(&belt.storage, 0..) |*slot, _slot_index| {
-                    if(slot.is_empty()) {
-                        continue;
-                    }
-
-                    const slot_index = @as(f32, @floatFromInt(_slot_index));
-
-                    const draw_position = switch (forground_tile.direction) {
-                        .up => .{.x = icon_start_position.x, .y = world_position.y - (icon_y_offset * slot_index)},
-                        .down => .{.x = icon_start_position.x, .y = world_position.y + (icon_y_offset * slot_index)},
-                        .left => .{.x = icon_start_position.x - (icon_x_offset * slot_index), .y = world_position.y},
-                        .right => .{.x = icon_start_position.x + (icon_x_offset * slot_index), .y = world_position.y},
-                    };
-
-                    const item_texture = slot.item_type.?.get_texture();
-                    draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
-                }
-            }
+            draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
         }
-      
 
         // tile place preview
         tile_preview: {
@@ -1459,7 +1498,7 @@ const Game = struct {
 
                     const direction = if(tile.has_direction()) self.player.placement_dirction else .down;
 
-                    draw_texture_pro(tile.get_texture().?, world_position.x, world_position.y, tile_width, tile_height, direction.get_rotation(), raylib.Fade(raylib.WHITE, 0.6), false);
+                    draw_texture_pro(tile.get_default_texture(), world_position.x, world_position.y, tile_width, tile_height, direction.get_rotation(), raylib.Fade(raylib.WHITE, 0.6), false);
                 }
             }
         }
@@ -1601,7 +1640,7 @@ const Game = struct {
                         draw_progress_bar_vertical(progress_bar_x, input_slot_y, progress_bar_width, size, raylib.RED, raylib.ORANGE, furnace.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.furnace_max_progress);
                     }
                 },
-                .belt => {},
+                .pipe => {},
                 .extractor => {},
             }
         }
@@ -1643,6 +1682,7 @@ const Game = struct {
         }
                     
         self.forground_tiles[tile_index].tile = .air;
+        self.tile_update_adjectcent_tiles(tile_index);
         return replcaing_tile;
     }
 
@@ -1672,13 +1712,42 @@ const Game = struct {
         }
 
         if(tile_data == null) {
-            tile.placed_update(tile_index, null, self);
+            tile.tile_update(tile_index, null, self);
         } else {
-            tile.placed_update(tile_index, &self.tile_data.items[self.tile_data.items.len - 1], self);
+            tile.tile_update(tile_index, &self.tile_data.items[self.tile_data.items.len - 1], self);
         }
 
+        self.tile_update_adjectcent_tiles(tile_index);
         return true;
     }
+
+    fn tile_update_adjectcent_tiles(self: *Self, tile_index: usize) void {
+        const tile_position = get_x_and_y_from_tile_index(tile_index);
+        const adjacent_tile_positions = [_]TilePosition{
+            tile_position.get_adjacent_tile_at_direction(.up),
+            tile_position.get_adjacent_tile_at_direction(.left),
+            tile_position.get_adjacent_tile_at_direction(.right),
+            tile_position.get_adjacent_tile_at_direction(.down),
+        };
+
+        for(&adjacent_tile_positions) |*position| {
+            if(!valid_tile_position(position.*)) {
+                continue;
+            }
+
+            const target_index = get_tile_index_from_x_and_y(position.x, position.y);
+            const target_tile = self.forground_tiles[target_index].tile;
+            if(target_tile == .air) continue;
+
+            var target_tile_data: ?*TileData = undefined;
+            if(target_tile.has_tile_data()) {
+                target_tile_data = self.get_tile_data(target_index) orelse unreachable;
+            }
+
+            self.forground_tiles[target_index].tile.tile_update(target_index, target_tile_data, self);
+        }
+    }
+
 
     fn get_tile_data(self: *const Self, tile_index: usize) ?*TileData {
         for(self.tile_data.items) |*tile_data| {
@@ -1911,6 +1980,9 @@ pub fn main() !void {
     tree_0_tile_texture =       try load_texture(tree_0_image_path);
     belt_tile_texture =         try load_texture(belt_image_path);
     extractor_tile_texture =    try load_texture(extractor_image_path);
+    pipe_tile_texture =         try load_texture(pipe_image_path);
+    pipe_left_tile_texture =    try load_texture(pipe_left_image_path);
+    pipe_right_tile_texture =   try load_texture(pipe_right_image_path);
 
     // item texture setup
     iron_item_texture =         try load_texture(iron_item_image_path);
