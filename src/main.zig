@@ -11,9 +11,7 @@ const std = @import("std");
 const raylib = @cImport(@cInclude("raylib.h"));
 const raygui = @cImport(@cInclude("raygui.h"));
 
-
 const fastnoise = @import("fastnoise.zig");
-
 
 const player_speed: f32 = 450;
 
@@ -43,6 +41,7 @@ const extractor_image_path = "tiles/extractor.png";
 const pipe_image_path = "tiles/pipe.png";
 const pipe_left_image_path = "tiles/pipe_left.png";
 const pipe_right_image_path = "tiles/pipe_right.png";
+const pipe_merger_image_path = "tiles/pipe_merger.png";
 
 // ITEMS
 const iron_item_image_path = "items/iron.png";
@@ -68,6 +67,7 @@ var extractor_tile_texture: raylib.Texture = undefined;
 var pipe_tile_texture: raylib.Texture = undefined;
 var pipe_left_tile_texture: raylib.Texture = undefined;
 var pipe_right_tile_texture: raylib.Texture = undefined;
+var pipe_merger_tile_texture: raylib.Texture = undefined;
 
 // ITEMS
 var iron_item_texture: raylib.Texture = undefined;
@@ -348,6 +348,7 @@ const Tile = enum(u8) {
     tree_base,
     tree_0,
     pipe,
+    pipe_merger,
     extractor,
 
     fn extractor_can_take(self: *const Self) bool {
@@ -359,8 +360,7 @@ const Tile = enum(u8) {
 
     fn pipe_can_give(self: *const Self) bool {
         return switch (self.*) {
-            .furnace => true,
-            .pipe => true,
+            .furnace, .pipe, .pipe_merger => true,
             else => false,
         };
     }
@@ -374,7 +374,7 @@ const Tile = enum(u8) {
 
     fn has_direction(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .pipe, .extractor => true,
+            .miner, .pipe, .pipe_merger, .extractor => true,
             else => false,
         };
     }
@@ -438,15 +438,64 @@ const Tile = enum(u8) {
             .tree_base => tree_base_tile_texture,
             .tree_0 => tree_0_tile_texture,
             .pipe => pipe_tile_texture,
+            .pipe_merger => pipe_merger_tile_texture,
             .extractor => extractor_tile_texture
         };
     }
 
     fn has_tile_data(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .pipe, .extractor => true,
+            .miner, .furnace, .pipe, .pipe_merger, .extractor => true,
             else => false,
         };
+    }
+
+    // when a tile is place or updated can it
+    // tuen to this tile to give items
+    fn can_pipe_turn_to(self: Self, from_index: usize, tile_index: usize, game: *const Game) bool {
+        switch (self) {
+            .furnace => return true,
+            .pipe => {
+                const current_position = get_x_and_y_from_tile_index(tile_index);
+                if(!valid_tile_position(current_position)) {
+                    return false;
+                }
+
+                const current_direction = game.forground_tiles[tile_index].direction;
+                const input_position = current_position.get_adjacent_tile_at_direction(current_direction);
+                if(!valid_tile_position(input_position)) {
+                    return false;
+                }
+
+                return from_index == get_tile_index_from_x_and_y(input_position.x, input_position.y);
+            },
+            .pipe_merger => {
+                const current_position = get_x_and_y_from_tile_index(tile_index);
+                if(!valid_tile_position(current_position)) {
+                    return false;
+                }
+
+                const current_direction = game.forground_tiles[tile_index].direction;
+
+                const input_positions = [_]TilePosition{
+                    current_position.get_adjacent_tile_at_direction(current_direction),
+                    current_position.get_adjacent_tile_at_direction(current_direction.counter_clockwise())
+                };
+
+                for(&input_positions) |input_position| {
+                    if(!valid_tile_position(input_position)) {
+                        continue;
+                    }
+
+                    if(from_index == get_tile_index_from_x_and_y(input_position.x, input_position.y)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            },
+            else => return false,
+        }
     }
 
     // update called when the player removes this tile,
@@ -513,14 +562,10 @@ const Tile = enum(u8) {
 
                     const target_index = get_tile_index_from_x_and_y(target.position.x, target.position.y);
                     const target_tile = game.forground_tiles[target_index];
-                    if(target_tile.tile == .pipe) {
-                        // cehck if the tile the pipe has the input from is
-                        // the current tile, then we can point at it
-                        const target_tile_input_tile_position = target.position.get_adjacent_tile_at_direction(target_tile.direction);
-                        if(position.x == target_tile_input_tile_position.x and position.y == target_tile_input_tile_position.y) {
-                            pipe.relative_output_direction = target.relative_direction;
-                            return;
-                        }
+
+                    if(target_tile.tile.can_pipe_turn_to(tile_index, target_index, game)) {
+                        pipe.relative_output_direction = target.relative_direction;
+                        return;
                     }
                 }
             },
@@ -592,7 +637,7 @@ const Tile = enum(u8) {
                     }
                 }
             },
-            .pipe => {
+            .pipe, .pipe_merger => {
                 const pipe = &tile_data.?.data.pipe;
 
                 { // progress items in the pipe
@@ -788,34 +833,41 @@ const Tile = enum(u8) {
 
                 return false;
             },
+            .pipe_merger => {
+                const pipe = &tile_data.?.data.pipe;
+
+                const current_position = get_x_and_y_from_tile_index(tile_index);
+                const current_direction = game.forground_tiles[tile_index].direction;
+
+                const input_positions = [_]TilePosition{
+                    current_position.get_adjacent_tile_at_direction(current_direction),
+                    current_position.get_adjacent_tile_at_direction(current_direction.counter_clockwise())
+                };
+
+                direction_checking: {
+                    for(&input_positions) |input_position| {
+                    if(from_index == get_tile_index_from_x_and_y(input_position.x, input_position.y)) {
+                            break :direction_checking;            
+                        }
+                    }
+
+                    return false;
+                }
+
+                for(&pipe.storage) |*slot| {
+                    if(slot.item == null) {
+                        slot.item = item;
+                        return true;
+                    }
+                }
+
+                return false;
+            },
             else => {
                 unreachable;
             }
         }
 
-    }
-
-    fn accept_input_from_machine(self: Self, item: Item, count: usize, tile_index: usize, tile_data: ?*TileData, game: *const Game) usize {
-        _ = count; // autofix
-        _ = tile_index; // autofix
-        _ = game; // autofix
-        switch (self) {
-            .belt => {
-                const belt = &tile_data.?.data.belt;
-
-                if(!belt.storage[0].is_empty()) {
-                    return 0;
-                }
-
-                belt.storage[0].item_type = item;
-                belt.storage[0].count = 1;
-
-                return 1;
-            },
-            else => {}
-        }
-
-        return 0;
     }
 
     fn ctrl_left_click(self: Self, tile_index: usize, tile_data: ?*TileData, game: *Game) void {
@@ -909,6 +961,7 @@ const Tile = enum(u8) {
                     },
                 },
             },
+            .pipe_merger => Tile.pipe.get_default_tile_data(),
             .extractor => TileData{
                 .tile_index = 0,
                 .data = .{
@@ -983,6 +1036,7 @@ const Item = enum {
     stone,
     wood,
     pipe,
+    pipe_merger,
     extractor,
 
     fn can_be_fuel(self: *const Self) bool {
@@ -1024,6 +1078,7 @@ const Item = enum {
             .stone => stone_item_texture,
             .wood => wood_item_texture,
             .pipe => pipe_tile_texture,
+            .pipe_merger => pipe_merger_tile_texture,
             .extractor => extractor_tile_texture
         };
     }
@@ -1037,6 +1092,7 @@ const Item = enum {
             .miner => .miner,
             .furnace => .furnace,
             .pipe => .pipe,
+            .pipe_merger => .pipe_merger,
             .extractor => .extractor,
             else => null,
         };
@@ -1294,10 +1350,12 @@ const Game = struct {
         game.player.inventory[0] = .{ .item_type = .miner, .count = 99 };
         game.player.inventory[1] = .{ .item_type = .extractor, .count = 99 };
         game.player.inventory[2] = .{ .item_type = .pipe, .count = 99 };
-        game.player.inventory[3] = .{ .item_type = .coal, .count = 99 };
+        game.player.inventory[3] = .{ .item_type = .pipe_merger, .count = 99 };
         game.player.inventory[4] = .{ .item_type = .coal, .count = 99 };
-        game.player.inventory[5] = .{ .item_type = .furnace, .count = 99 };
-        game.player.inventory[6] = .{ .item_type = .stone, .count = 99 };
+        game.player.inventory[5] = .{ .item_type = .coal, .count = 99 };
+        game.player.inventory[6] = .{ .item_type = .furnace, .count = 99 };
+        game.player.inventory[7] = .{ .item_type = .coal, .count = 99 };
+        game.player.inventory[8] = .{ .item_type = .coal, .count = 99 };
         
         return game;
     }
@@ -2044,6 +2102,7 @@ pub fn main() !void {
     pipe_tile_texture =         try load_texture(pipe_image_path);
     pipe_left_tile_texture =    try load_texture(pipe_left_image_path);
     pipe_right_tile_texture =   try load_texture(pipe_right_image_path);
+    pipe_merger_tile_texture =   try load_texture(pipe_merger_image_path);
 
     // item texture setup
     iron_item_texture =         try load_texture(iron_item_image_path);
