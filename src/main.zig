@@ -351,6 +351,13 @@ const Tile = enum(u8) {
     pipe_merger,
     extractor,
 
+    fn has_clickable_ui(self: *const Self) bool {
+        return switch (self.*) {
+            .miner => true,
+            else => false,
+        };
+    }
+
     fn extractor_can_take(self: *const Self) bool {
         return switch (self.*) {
             .miner, .pipe => true,
@@ -870,45 +877,6 @@ const Tile = enum(u8) {
 
     }
 
-    fn ctrl_left_click(self: Self, tile_index: usize, tile_data: ?*TileData, game: *Game) void {
-        _ = tile_index; // autofix
-        switch (self) {
-            .miner => {
-                var miner = &tile_data.?.data.miner;
-                game.player.add_stack_from_inventory_slot_to_inventory(&miner.output);
-            },
-            .furnace => {
-                var furnace = &tile_data.?.data.furnace;
-                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.output);
-            },
-            else => {},
-        }
-    }
-
-    fn ctrl_right_click(self: Self, tile_index: usize, tile_data: ?*TileData, game: *Game) void {
-        _ = tile_index; // autofix
-        switch (self) {
-            .miner => {
-                var miner = &tile_data.?.data.miner;
-                if(game.player.get_selected_item_type()) |input_item| {
-                    if(!input_item.can_be_fuel()) return;
-                    game.player.add_stack_from_selected_slot_to_inventory_slot(&miner.input);
-                }
-            },
-            .furnace => {
-                var furnace = &tile_data.?.data.furnace;
-                if(game.player.get_selected_item_type()) |input_item| {
-                    if(input_item.can_be_fuel()) {
-                        game.player.add_stack_from_selected_slot_to_inventory_slot(&furnace.fuel_input);
-                    } else if(input_item.can_be_smelted()) {
-                        game.player.add_stack_from_selected_slot_to_inventory_slot(&furnace.ingredient_input);
-                    }
-                }
-            },
-            else => {},
-        }
-    }
-
     fn get_default_tile_data(self: *const Self) ?TileData {
         return switch (self.*) {
             .miner => TileData{
@@ -1120,6 +1088,36 @@ const InventorySlot = struct {
         return amount_taken;
     }
 
+    // moves all items to another slot
+    // checks need to be done before this to
+    // make sure no items or lost
+    fn move_items_to(self: *Self, other: *Self) void {
+        if(self.item_type == null) {
+            return;
+        }
+
+        if(other.item_type != null and self.item_type != other.item_type) {
+            return;
+        }
+
+        other.item_type = self.item_type;
+
+        const max_to_add = max_item_stack - other.count;
+        other.count += self.take_amount(max_to_add);
+    }
+
+    fn clear(self: *Self) usize {
+        if(self.item_type == null) {
+            return 0;
+        }
+
+        const current_count = self.count;
+        self.item_type = null;
+        self.count = 0;
+
+        return current_count;
+    }
+
     fn is_empty(self: *const Self) bool {
         return self.item_type == null;
     }
@@ -1272,6 +1270,110 @@ const Player = struct {
     }
 };
 
+const UIIInventorySlot = struct {
+    const Self = @This();
+
+    x: f32,
+    y: f32,
+    size: f32,
+
+    fn draw(self: *const Self, inventory_slot: *const InventorySlot, tint: raylib.Color) void {
+        draw_texture_tint(item_slot_texture, self.x, self.y, self.size, self.size, tint);
+
+        if(inventory_slot.item_type) |item| {                     
+            const item_texture = item.get_texture();
+            draw_texture(item_texture, self.x, self.y, self.size, self.size);
+            
+            // max size is 99 so 2 bytes is fine here
+            var text_buffer = std.mem.zeroes([2]u8);
+            const string = std.fmt.bufPrint(text_buffer[0..], "{}", .{inventory_slot.count}) catch unreachable;
+            draw_text(string, self.x, self.y, 20, raylib.WHITE);
+        }
+    }
+
+    fn mouse_over(self: *const Self, mouse_position: WorldPosition) bool {
+        return mouse_position.x >= self.x and mouse_position.x <= (self.x + self.size) 
+            and mouse_position.y >= self.y and mouse_position.y <= (self.y + self.size);
+    }
+};
+
+const UIPanel = union(enum) {
+    empty: struct {},
+    miner_inventory: struct {
+        tile_index: usize,
+        input_slot: UIIInventorySlot,
+        output_slot: UIIInventorySlot,
+    },
+
+    fn empty() UIPanel {
+        return UIPanel{
+            .empty = .{}
+        };   
+    }
+
+    fn miner_inventory(tile_index: usize) UIPanel {
+        const slot_size = 50;
+        
+        const input_slot_x = (window_width() * 0.5) - 100 - (slot_size * 0.5);
+        const output_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
+
+        const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
+
+        return UIPanel{
+            .miner_inventory = .{
+                .tile_index = tile_index,
+                .input_slot = .{
+                    .x = input_slot_x,
+                    .y = slot_y,
+                    .size = slot_size
+                },
+                .output_slot = .{
+                    .x = output_slot_x,
+                    .y = slot_y,
+                    .size = slot_size
+                }
+            }
+        };   
+    }
+};
+
+const UI = struct {
+    const Self = @This();
+
+    in_hand: InventorySlot,
+    player_panel: [9]UIIInventorySlot,
+    current_open_panel: UIPanel, 
+
+    fn init() Self {
+        var ui: Self = undefined;
+
+        ui.current_open_panel = UIPanel.empty();
+        ui.in_hand = InventorySlot{
+            .item_type = null,
+            .count = 0
+        };
+
+        // player inventory panel init
+        {
+            const padding = 5;
+            const slot_size = 50;
+            const total_size = (9 * slot_size) + (8 * padding);
+            const start_x = (window_width() * 0.5) - (total_size * 0.5);
+            const y = 100;
+
+            for(&ui.player_panel, 0..) |*ui_slot, _i| {
+                const i = @as(f32, @floatFromInt(_i));
+
+                ui_slot.x = start_x + (slot_size * i) + (padding * i);
+                ui_slot.y = y;
+                ui_slot.size = slot_size;
+            }
+        }
+
+        return ui;
+    }
+};
+
 const Game = struct {
     const Self = @This();
 
@@ -1288,7 +1390,8 @@ const Game = struct {
         left_mouse: bool,
         right_mouse: bool,
         ctrl: bool,
-        left_shift: bool
+        left_shift: bool,
+        tab: bool
     };
 
     seed: i32,
@@ -1301,6 +1404,7 @@ const Game = struct {
     world_gen_noise: fastnoise.Noise(f32),
     allocator: std.mem.Allocator,
     tick_timer: f32,
+    ui_state: UI,
 
     fn init(allocator: std.mem.Allocator) !Game {
         const background_tiles = try allocator.alloc(Tile, world_tile_height * world_tile_width);
@@ -1344,6 +1448,7 @@ const Game = struct {
             },
             .allocator = allocator,
             .tick_timer = 0,
+            .ui_state = UI.init(),
         };
 
         // temp adding items to inventory 
@@ -1393,6 +1498,7 @@ const Game = struct {
         self.input.left_mouse = raylib.IsMouseButtonPressed(0);
         self.input.ctrl = raylib.IsKeyDown(raylib.KEY_LEFT_CONTROL);
         self.input.left_shift = raylib.IsKeyDown(raylib.KEY_LEFT_SHIFT);
+        self.input.tab = raylib.IsKeyPressed(raylib.KEY_TAB);
     }
 
     fn tick_update(self: *Self) void {
@@ -1453,6 +1559,11 @@ const Game = struct {
             self.player.selected_item += 1;
         }
 
+        // ui controls
+        if(self.input.tab) {
+            self.close_inventory();
+        }
+
         // camera update
         const zoom_amount = 0.2;
         if(self.input.up_arrow) {
@@ -1476,10 +1587,13 @@ const Game = struct {
 
             const tile_coords = mouse_position.to_tile_position();
             const tile_index = get_tile_index_from_x_and_y(tile_coords.x, tile_coords.y);
-            const tile = self.forground_tiles[tile_index].tile;
-            const tile_data = if (tile.has_tile_data()) self.get_tile_data(tile_index) else null;
 
-            if(self.input.right_mouse and !self.input.ctrl) {
+            if(self.input.right_mouse) {
+                if(self.forground_tiles[tile_index].tile != .air) {
+                    self.open_inventory(tile_index);
+                    break :mouse_update;
+                }
+
                 const current_selected_item = self.player.get_selected_item_type();
                 if(current_selected_item != null) {
                     const items_tile = current_selected_item.?.tile_when_placed();
@@ -1493,7 +1607,7 @@ const Game = struct {
                 }
             }
     
-            if(self.input.left_mouse and !self.input.ctrl) {
+            if(self.input.left_mouse) {
                 const removed_tile = self.remove_tile_in_foreground(tile_index);
     
                 if(removed_tile) |value| {
@@ -1505,13 +1619,50 @@ const Game = struct {
                     }
                 }
             }
-    
-            if(self.input.right_mouse and self.input.ctrl) {
-                tile.ctrl_right_click(tile_index, tile_data, self);
+        }
+
+        // interactive panels and inventory update
+        panels: {
+            const mouse_position = get_mouse_screen_position();
+
+            switch (self.ui_state.current_open_panel) {
+                .empty => break :panels,
+                .miner_inventory => |*miner_inventory| {
+                    const miner_tile_data = self.get_tile_data(miner_inventory.tile_index) orelse {
+                        self.close_inventory();
+                        break :panels;
+                    };
+
+                    if(miner_inventory.input_slot.mouse_over(mouse_position) and self.input.left_mouse) {
+                        const input_slot = &miner_tile_data.data.miner.input;
+                        if(self.ui_state.in_hand.is_empty()) {
+                            input_slot.move_items_to(&self.ui_state.in_hand);
+                        } else {
+                            if(self.ui_state.in_hand.item_type.?.can_be_fuel()) {
+                                self.ui_state.in_hand.move_items_to(input_slot);
+                            }
+                        }
+                    }
+
+                    if(miner_inventory.output_slot.mouse_over(mouse_position) and self.input.left_mouse) {
+                        const output_slot = &miner_tile_data.data.miner.output;
+                        if(self.ui_state.in_hand.is_empty()) {
+                            output_slot.move_items_to(&self.ui_state.in_hand);
+                        }                   
+                    }
+                }
             }
-    
-            if(self.input.left_mouse and self.input.ctrl) {
-                tile.ctrl_left_click(tile_index, tile_data, self);
+
+            for(&self.ui_state.player_panel, 0..) |*ui_slot, i| {
+                if(ui_slot.mouse_over(mouse_position) and self.input.left_mouse) {
+                    const player_inventory_slot = &self.player.inventory[i];
+
+                    if(self.ui_state.in_hand.is_empty()) {
+                        player_inventory_slot.move_items_to(&self.ui_state.in_hand);
+                    } else if(!self.ui_state.in_hand.is_empty()) {
+                        self.ui_state.in_hand.move_items_to(player_inventory_slot);
+                    }
+                }             
             }
         }
     }
@@ -1625,6 +1776,49 @@ const Game = struct {
 
         // end 2d mode so ui is not in world space
         raylib.EndMode2D();
+
+        // ui panels and inventory drawing
+        game_ui_drawing: {
+            const mouse_screen_position = get_mouse_screen_position();
+
+            // draw current open panel
+            switch (self.ui_state.current_open_panel) {
+                .empty => {
+                    break :game_ui_drawing;
+                },
+                .miner_inventory => |*miner_ui| {
+                    draw_texture_pro(item_slot_texture, window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.WHITE, true);
+    
+                    if(self.forground_tiles[miner_ui.tile_index].tile != .miner) {
+                        std.debug.panic("trying to draw inventory of a tile that does not exist :: {}\n", .{miner_ui.tile_index});
+                    }
+    
+                    const tile_data = self.get_tile_data(miner_ui.tile_index) orelse unreachable; // dont know what to do here if it is missing :[
+    
+                    miner_ui.input_slot.draw(&tile_data.data.miner.input, raylib.BLUE);
+                    miner_ui.output_slot.draw(&tile_data.data.miner.output, raylib.RED);
+                }
+            }
+
+            // draw player inventory
+            for(&self.ui_state.player_panel, 0..) |*ui_slot, i| {
+                ui_slot.draw(&self.player.inventory[i], raylib.WHITE);
+            }
+
+            // draw item in hand
+            if(self.ui_state.in_hand.item_type) |item| {                     
+                const item_texture = item.get_texture();
+                const icon_x = mouse_screen_position.x + 10;
+                const icon_y = mouse_screen_position.y + 10;
+
+                draw_texture(item_texture, icon_x, icon_y, 50, 50);
+                
+                // max size is 99 so 2 bytes is fine here
+                var text_buffer = std.mem.zeroes([2]u8);
+                const string = std.fmt.bufPrint(text_buffer[0..], "{}", .{self.ui_state.in_hand.count}) catch unreachable;
+                draw_text(string, icon_x, icon_y, 20, raylib.WHITE);
+            }
+        }
         
         // fps text 
         {
@@ -1700,73 +1894,27 @@ const Game = struct {
             }
         }
 
-        // ctrl hover ui 
-        hover_ui: {
-            if(!self.input.ctrl) {
-                break :hover_ui;
-            }
+        raylib.EndDrawing();
+    }
 
-            const mouse_world_position = self.get_mouse_world_position();
-            if(!mouse_world_position.in_world_bounds()) {
-                break :hover_ui;
-            }
+    fn open_inventory(self: *Self, tile_index: usize) void {
+        const tile = self.forground_tiles[tile_index].tile;
 
-            const mouse_screen_position = get_mouse_screen_position();
-
-            const tile_coords = mouse_world_position.to_tile_position();
-            const tile_index = get_tile_index_from_x_and_y(tile_coords.x, tile_coords.y);
-            const tile = self.forground_tiles[tile_index].tile;
-
-            if(!tile.has_tile_data()) {
-                break :hover_ui;
-            }
-
-            const tile_data = self.get_tile_data(tile_index) orelse unreachable; 
-            
-            switch (tile_data.data) {
-                .miner => |*miner| {
-                    const output_slot_x = mouse_screen_position.x + 15;
-                    const output_slot_y = mouse_screen_position.y + 15;
-                    const size = 50;
-                    const padding = 5;
-                    const input_slot_y = output_slot_y - (size + padding);
-
-                    draw_inventory_slot(&miner.input, output_slot_x, input_slot_y, size, raylib.BLUE);  // input slot
-                    draw_inventory_slot(&miner.output, output_slot_x, output_slot_y, size, raylib.RED); // output slot
-
-                    const progress_bar_x = output_slot_x + size + padding;
-                    draw_progress_bar_vertical(progress_bar_x, output_slot_y, 8, size, raylib.BLUE, raylib.WHITE, miner.progress, Tile.miner_max_progress);
-                    if(miner.fuel_item_in_use) |fuel_item| {
-                        draw_progress_bar_vertical(progress_bar_x, input_slot_y, 8, size, raylib.RED, raylib.ORANGE, miner.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.miner_max_progress);
-                    }
-                },
-                .furnace => |*furnace| {
-                    const output_slot_x = mouse_screen_position.x + 15;
-                    const output_slot_y = mouse_screen_position.y + 15;
-                    const size = 50;
-                    const padding = 5;
-                    const input_slot_y = output_slot_y - (size + padding);
-
-                    const progress_bar_x = output_slot_x + size + padding;
-                    const progress_bar_width = 8;
-                    const ingredient_slot_x = progress_bar_x + progress_bar_width + padding;
-
-                    draw_inventory_slot(&furnace.fuel_input, output_slot_x, input_slot_y, size, raylib.BLUE);           // fuel input slot
-                    draw_inventory_slot(&furnace.ingredient_input, ingredient_slot_x, input_slot_y, size, raylib.BLUE); // ingredient slot
-                    draw_inventory_slot(&furnace.output, output_slot_x, output_slot_y, size, raylib.RED);               // output slot
-               
-                    draw_progress_bar_vertical(progress_bar_x, output_slot_y, progress_bar_width, size, raylib.BLUE, raylib.WHITE, furnace.progress, Tile.furnace_max_progress);
-                    if(furnace.fuel_item_in_use) |fuel_item| {
-                        draw_progress_bar_vertical(progress_bar_x, input_slot_y, progress_bar_width, size, raylib.RED, raylib.ORANGE, furnace.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.furnace_max_progress);
-                    }
-                },
-                .pipe => {},
-                .extractor => {},
-            }
+        if(!tile.has_clickable_ui()) {
+            return;
         }
 
-        raylib.EndDrawing();
-    } 
+        switch (tile) {
+            .miner => {
+                self.ui_state.current_open_panel = UIPanel.miner_inventory(tile_index);
+            },
+            else => {},
+        }
+    }
+
+    fn close_inventory(self: *Self) void {
+        self.ui_state.current_open_panel = UIPanel.empty();
+    }
 
     fn get_mouse_world_position(self: *const Self) WorldPosition {
         const screen_position = raylib.GetMousePosition();
