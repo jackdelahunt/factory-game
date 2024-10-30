@@ -353,7 +353,7 @@ const Tile = enum(u8) {
 
     fn has_clickable_ui(self: *const Self) bool {
         return switch (self.*) {
-            .miner => true,
+            .miner, .furnace=> true,
             else => false,
         };
     }
@@ -1304,6 +1304,12 @@ const UIPanel = union(enum) {
         input_slot: UIIInventorySlot,
         output_slot: UIIInventorySlot,
     },
+    furnace_inventory: struct {
+        tile_index: usize,
+        input_fuel_slot: UIIInventorySlot,
+        input_ingredient_slot: UIIInventorySlot,
+        output_slot: UIIInventorySlot,
+    },
 
     fn empty() UIPanel {
         return UIPanel{
@@ -1324,6 +1330,37 @@ const UIPanel = union(enum) {
                 .tile_index = tile_index,
                 .input_slot = .{
                     .x = input_slot_x,
+                    .y = slot_y,
+                    .size = slot_size
+                },
+                .output_slot = .{
+                    .x = output_slot_x,
+                    .y = slot_y,
+                    .size = slot_size
+                }
+            }
+        };   
+    }
+
+    fn furnace_inventory(tile_index: usize) UIPanel {
+        const slot_size = 50;
+        
+        const input_fuel_slot_x = (window_width() * 0.5) - 100 - (slot_size * 0.5);
+        const input_ingredient_slot_x = (window_width() * 0.5) - (slot_size * 0.5);
+        const output_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
+
+        const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
+
+        return UIPanel{
+            .furnace_inventory =.{
+                .tile_index = tile_index,
+                .input_fuel_slot = .{
+                    .x = input_fuel_slot_x,
+                    .y = slot_y,
+                    .size = slot_size
+                },
+                .input_ingredient_slot =.{
+                    .x = input_ingredient_slot_x,
                     .y = slot_y,
                     .size = slot_size
                 },
@@ -1650,6 +1687,41 @@ const Game = struct {
                             output_slot.move_items_to(&self.ui_state.in_hand);
                         }                   
                     }
+                },
+                .furnace_inventory => |*furnace_inventory| {
+                    const furnace_tile_data = self.get_tile_data(furnace_inventory.tile_index) orelse {
+                        self.close_inventory();
+                        break :panels;
+                    };
+
+                    if(furnace_inventory.input_ingredient_slot.mouse_over(mouse_position) and self.input.left_mouse) {
+                        const input_slot = &furnace_tile_data.data.furnace.ingredient_input;
+                        if(self.ui_state.in_hand.is_empty()) {
+                            input_slot.move_items_to(&self.ui_state.in_hand);
+                        } else {
+                            if(self.ui_state.in_hand.item_type.?.can_be_smelted()) {
+                                self.ui_state.in_hand.move_items_to(input_slot);
+                            }
+                        }
+                    }
+
+                    if(furnace_inventory.input_fuel_slot.mouse_over(mouse_position) and self.input.left_mouse) {
+                        const input_slot = &furnace_tile_data.data.furnace.fuel_input;
+                        if(self.ui_state.in_hand.is_empty()) {
+                            input_slot.move_items_to(&self.ui_state.in_hand);
+                        } else {
+                            if(self.ui_state.in_hand.item_type.?.can_be_fuel()) {
+                                self.ui_state.in_hand.move_items_to(input_slot);
+                            }
+                        }
+                    }
+
+                    if(furnace_inventory.output_slot.mouse_over(mouse_position) and self.input.left_mouse) {
+                        const output_slot = &furnace_tile_data.data.furnace.output;
+                        if(self.ui_state.in_hand.is_empty()) {
+                            output_slot.move_items_to(&self.ui_state.in_hand);
+                        }                   
+                    }
                 }
             }
 
@@ -1790,13 +1862,34 @@ const Game = struct {
                     draw_texture_pro(item_slot_texture, window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.WHITE, true);
     
                     if(self.forground_tiles[miner_ui.tile_index].tile != .miner) {
-                        std.debug.panic("trying to draw inventory of a tile that does not exist :: {}\n", .{miner_ui.tile_index});
+                        self.close_inventory();
+                        break :game_ui_drawing;
                     }
     
-                    const tile_data = self.get_tile_data(miner_ui.tile_index) orelse unreachable; // dont know what to do here if it is missing :[
+                    const tile_data = self.get_tile_data(miner_ui.tile_index) orelse {
+                        self.close_inventory();
+                        break :game_ui_drawing;
+                    };
     
                     miner_ui.input_slot.draw(&tile_data.data.miner.input, raylib.BLUE);
                     miner_ui.output_slot.draw(&tile_data.data.miner.output, raylib.RED);
+                },
+                .furnace_inventory => |*furnace_ui| {
+                    draw_texture_pro(item_slot_texture, window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.ORANGE, true);
+    
+                    if(self.forground_tiles[furnace_ui.tile_index].tile != .furnace) {
+                        self.close_inventory();
+                        break :game_ui_drawing;
+                    }
+    
+                    const tile_data = self.get_tile_data(furnace_ui.tile_index) orelse {
+                        self.close_inventory();
+                        break :game_ui_drawing;
+                    };
+
+                    furnace_ui.input_ingredient_slot.draw(&tile_data.data.furnace.ingredient_input, raylib.BLUE);
+                    furnace_ui.input_fuel_slot.draw(&tile_data.data.furnace.fuel_input, raylib.BLUE);
+                    furnace_ui.output_slot.draw(&tile_data.data.furnace.output, raylib.RED);
                 }
             }
 
@@ -1908,7 +2001,10 @@ const Game = struct {
             .miner => {
                 self.ui_state.current_open_panel = UIPanel.miner_inventory(tile_index);
             },
-            else => {},
+            .furnace => {
+                self.ui_state.current_open_panel = UIPanel.furnace_inventory(tile_index);
+            },
+            else => unreachable,
         }
     }
 
