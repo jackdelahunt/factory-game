@@ -15,8 +15,8 @@ const fastnoise = @import("fastnoise.zig");
 
 const player_speed: f32 = 450;
 
-const default_screen_width = 1200;
-const default_screen_height = 800;
+const default_screen_width = 1400;
+const default_screen_height = 1000;
 
 const tile_width: i64 = 24;
 const tile_height: i64 = 24;
@@ -25,6 +25,8 @@ const world_tile_width = 150;
 const world_tile_height = 150;
 
 const max_item_stack = 99;
+
+const player_inventory_size = 9 * 6;
 
 // images paths
 //
@@ -1065,6 +1067,13 @@ const Item = enum {
             else => null,
         };
     }
+
+    fn can_be_placed(self: *const Self) bool {
+        return switch (self.*) {
+            .miner, .furnace, .pipe, .pipe_merger, .extractor => true,
+            else => false,
+        };
+    }
 };
 
 const InventorySlot = struct {
@@ -1106,6 +1115,30 @@ const InventorySlot = struct {
         other.count += self.take_amount(max_to_add);
     }
 
+    fn move_half_items_to(self: *Self, other: *Self) void {
+        if(self.item_type == null) {
+            return;
+        }
+
+        if(other.item_type != null and self.item_type != other.item_type) {
+            return;
+        }
+
+        other.item_type = self.item_type;
+        const half_current = self.count / 2;
+        other.count += self.take_amount(half_current);
+    }
+
+    fn swap(self: *Self, other: *Self) void {
+        const other_copy = other.*;
+
+        other.item_type = self.item_type;
+        other.count = self.count;
+
+        self.item_type = other_copy.item_type;
+        self.count = other_copy.count;
+    }
+
     fn clear(self: *Self) usize {
         if(self.item_type == null) {
             return 0;
@@ -1132,7 +1165,7 @@ const Player = struct {
 
     x: f32,
     y: f32,
-    inventory:[9]InventorySlot,
+    inventory:[player_inventory_size]InventorySlot,
     selected_item: usize,
     placement_dirction: Direction,
 
@@ -1259,6 +1292,8 @@ const Player = struct {
             const slot = &self.inventory[i];
             if(slot.item_type != null) continue;
 
+            if(i < 9 and !item.can_be_placed()) continue;
+
             const amount_to_add = if (count > max_item_stack) max_item_stack else count;
             
             slot.item_type = item;
@@ -1270,12 +1305,18 @@ const Player = struct {
     }
 };
 
+const only_smeltable_flag: u8     = 0b00000001;
+const only_fuel_flag: u8          = 0b00000010;
+const only_take_flag: u8          = 0b00000100;
+const only_placeable_flag: u8     = 0b00001000;
+
 const UIIInventorySlot = struct {
     const Self = @This();
 
     x: f32,
     y: f32,
     size: f32,
+    flags: u8,
 
     fn draw(self: *const Self, inventory_slot: *const InventorySlot, tint: raylib.Color) void {
         draw_texture_tint(item_slot_texture, self.x, self.y, self.size, self.size, tint);
@@ -1294,6 +1335,10 @@ const UIIInventorySlot = struct {
     fn mouse_over(self: *const Self, mouse_position: WorldPosition) bool {
         return mouse_position.x >= self.x and mouse_position.x <= (self.x + self.size) 
             and mouse_position.y >= self.y and mouse_position.y <= (self.y + self.size);
+    }
+
+    fn has_flag(self: *const Self, flag: u8) bool {
+        return (self.flags & flag) == flag;
     }
 };
 
@@ -1331,12 +1376,14 @@ const UIPanel = union(enum) {
                 .input_slot = .{
                     .x = input_slot_x,
                     .y = slot_y,
-                    .size = slot_size
+                    .size = slot_size,
+                    .flags = only_fuel_flag,
                 },
                 .output_slot = .{
                     .x = output_slot_x,
                     .y = slot_y,
-                    .size = slot_size
+                    .size = slot_size,
+                    .flags = only_take_flag
                 }
             }
         };   
@@ -1357,17 +1404,20 @@ const UIPanel = union(enum) {
                 .input_fuel_slot = .{
                     .x = input_fuel_slot_x,
                     .y = slot_y,
-                    .size = slot_size
+                    .size = slot_size,
+                    .flags = only_fuel_flag,
                 },
                 .input_ingredient_slot =.{
                     .x = input_ingredient_slot_x,
                     .y = slot_y,
-                    .size = slot_size
+                    .size = slot_size,
+                    .flags = only_smeltable_flag
                 },
                 .output_slot = .{
                     .x = output_slot_x,
                     .y = slot_y,
-                    .size = slot_size
+                    .size = slot_size,
+                    .flags = only_take_flag
                 }
             }
         };   
@@ -1378,7 +1428,7 @@ const UI = struct {
     const Self = @This();
 
     in_hand: InventorySlot,
-    player_panel: [9]UIIInventorySlot,
+    player_panel: [player_inventory_size]UIIInventorySlot,
     current_open_panel: UIPanel, 
 
     fn init() Self {
@@ -1396,14 +1446,20 @@ const UI = struct {
             const slot_size = 50;
             const total_size = (9 * slot_size) + (8 * padding);
             const start_x = (window_width() * 0.5) - (total_size * 0.5);
-            const y = 100;
+            const start_y = 25;
 
             for(&ui.player_panel, 0..) |*ui_slot, _i| {
                 const i = @as(f32, @floatFromInt(_i));
 
-                ui_slot.x = start_x + (slot_size * i) + (padding * i);
-                ui_slot.y = y;
+                const x_index = @mod(i, 9);
+                const y_index = @divFloor(i, 9);
+
+                ui_slot.x = start_x + (slot_size * x_index) + (padding * x_index);
+                ui_slot.y = start_y + (slot_size * y_index) + (padding * y_index);
                 ui_slot.size = slot_size;
+
+                // slots 0..8 are only for placable items
+                ui_slot.flags = if(_i < 9) only_placeable_flag else 0;
             }
         }
 
@@ -1420,6 +1476,7 @@ const Game = struct {
         s: bool,
         d: bool,
         r: bool,
+        e: bool,
         up_arrow: bool,
         down_arrow: bool,
         numbers: [9]bool, // we ignore 0
@@ -1428,7 +1485,6 @@ const Game = struct {
         right_mouse: bool,
         ctrl: bool,
         left_shift: bool,
-        tab: bool
     };
 
     seed: i32,
@@ -1457,7 +1513,7 @@ const Game = struct {
             .player = Player{
                 .x = @divFloor(world_tile_width * tile_width, 2),
                 .y = @divFloor(world_tile_height * tile_height, 2),
-                .inventory = std.mem.zeroes([9]InventorySlot),
+                .inventory = std.mem.zeroes([player_inventory_size]InventorySlot),
                 .selected_item = 0,
                 .placement_dirction = .down,
             },
@@ -1493,11 +1549,11 @@ const Game = struct {
         game.player.inventory[1] = .{ .item_type = .extractor, .count = 99 };
         game.player.inventory[2] = .{ .item_type = .pipe, .count = 99 };
         game.player.inventory[3] = .{ .item_type = .pipe_merger, .count = 99 };
-        game.player.inventory[4] = .{ .item_type = .coal, .count = 99 };
-        game.player.inventory[5] = .{ .item_type = .coal, .count = 99 };
         game.player.inventory[6] = .{ .item_type = .furnace, .count = 99 };
-        game.player.inventory[7] = .{ .item_type = .coal, .count = 99 };
-        game.player.inventory[8] = .{ .item_type = .coal, .count = 99 };
+
+        game.player.inventory[9] = .{ .item_type = .coal, .count = 99 };
+        game.player.inventory[10] = .{ .item_type = .coal, .count = 99 };
+        game.player.inventory[11] = .{ .item_type = .coal, .count = 99 };
         
         return game;
     }
@@ -1518,6 +1574,7 @@ const Game = struct {
         self.input.s = raylib.IsKeyDown(raylib.KEY_S);
         self.input.d = raylib.IsKeyDown(raylib.KEY_D);
         self.input.r = raylib.IsKeyPressed(raylib.KEY_R);
+        self.input.e = raylib.IsKeyPressed(raylib.KEY_E);
         self.input.up_arrow = raylib.IsKeyPressed(raylib.KEY_UP);
         self.input.down_arrow = raylib.IsKeyPressed(raylib.KEY_DOWN);
         self.input.numbers[0] = raylib.IsKeyDown(raylib.KEY_ONE);
@@ -1535,7 +1592,6 @@ const Game = struct {
         self.input.left_mouse = raylib.IsMouseButtonPressed(0);
         self.input.ctrl = raylib.IsKeyDown(raylib.KEY_LEFT_CONTROL);
         self.input.left_shift = raylib.IsKeyDown(raylib.KEY_LEFT_SHIFT);
-        self.input.tab = raylib.IsKeyPressed(raylib.KEY_TAB);
     }
 
     fn tick_update(self: *Self) void {
@@ -1569,7 +1625,6 @@ const Game = struct {
         }
 
         if(self.input.r) {
-
             // only change direction if current slot is a tile
             // that can be placed and can be rotated
             const slot = self.player.get_selected_inventory_slot();
@@ -1597,7 +1652,7 @@ const Game = struct {
         }
 
         // ui controls
-        if(self.input.tab) {
+        if(self.input.e) {
             self.close_inventory();
         }
 
@@ -1616,6 +1671,10 @@ const Game = struct {
         self.camera.target.y = self.player.y; 
 
         mouse_update: {
+            if(self.is_viewing_inventory()) {
+                break :mouse_update;
+            }
+
             const mouse_position = self.get_mouse_world_position();
             
             if(!mouse_position.in_world_bounds()) {
@@ -1660,81 +1719,135 @@ const Game = struct {
 
         // interactive panels and inventory update
         panels: {
-            const mouse_position = get_mouse_screen_position();
+            const mouse_position = get_mouse_screen_position(); 
+            
+            // current inventory slot the player is hovering over
+            // and the associated tile data inventory slot
+            var target_slots: ?struct {ui_slot: *UIIInventorySlot, slot: *InventorySlot} = null;
 
-            switch (self.ui_state.current_open_panel) {
-                .empty => break :panels,
-                .miner_inventory => |*miner_inventory| {
-                    const miner_tile_data = self.get_tile_data(miner_inventory.tile_index) orelse {
-                        self.close_inventory();
-                        break :panels;
-                    };
+            find_target_slot: {
+                for(&self.ui_state.player_panel, 0..) |*ui_slot, i| {
+                    if(ui_slot.mouse_over(mouse_position)) {
+                        const player_inventory_slot = &self.player.inventory[i];
+                        target_slots = .{
+                            .ui_slot = &self.ui_state.player_panel[i],
+                            .slot = player_inventory_slot
+                        };
 
-                    if(miner_inventory.input_slot.mouse_over(mouse_position) and self.input.left_mouse) {
-                        const input_slot = &miner_tile_data.data.miner.input;
-                        if(self.ui_state.in_hand.is_empty()) {
-                            input_slot.move_items_to(&self.ui_state.in_hand);
-                        } else {
-                            if(self.ui_state.in_hand.item_type.?.can_be_fuel()) {
-                                self.ui_state.in_hand.move_items_to(input_slot);
-                            }
-                        }
-                    }
-
-                    if(miner_inventory.output_slot.mouse_over(mouse_position) and self.input.left_mouse) {
-                        const output_slot = &miner_tile_data.data.miner.output;
-                        if(self.ui_state.in_hand.is_empty()) {
-                            output_slot.move_items_to(&self.ui_state.in_hand);
-                        }                   
-                    }
-                },
-                .furnace_inventory => |*furnace_inventory| {
-                    const furnace_tile_data = self.get_tile_data(furnace_inventory.tile_index) orelse {
-                        self.close_inventory();
-                        break :panels;
-                    };
-
-                    if(furnace_inventory.input_ingredient_slot.mouse_over(mouse_position) and self.input.left_mouse) {
-                        const input_slot = &furnace_tile_data.data.furnace.ingredient_input;
-                        if(self.ui_state.in_hand.is_empty()) {
-                            input_slot.move_items_to(&self.ui_state.in_hand);
-                        } else {
-                            if(self.ui_state.in_hand.item_type.?.can_be_smelted()) {
-                                self.ui_state.in_hand.move_items_to(input_slot);
-                            }
-                        }
-                    }
-
-                    if(furnace_inventory.input_fuel_slot.mouse_over(mouse_position) and self.input.left_mouse) {
-                        const input_slot = &furnace_tile_data.data.furnace.fuel_input;
-                        if(self.ui_state.in_hand.is_empty()) {
-                            input_slot.move_items_to(&self.ui_state.in_hand);
-                        } else {
-                            if(self.ui_state.in_hand.item_type.?.can_be_fuel()) {
-                                self.ui_state.in_hand.move_items_to(input_slot);
-                            }
-                        }
-                    }
-
-                    if(furnace_inventory.output_slot.mouse_over(mouse_position) and self.input.left_mouse) {
-                        const output_slot = &furnace_tile_data.data.furnace.output;
-                        if(self.ui_state.in_hand.is_empty()) {
-                            output_slot.move_items_to(&self.ui_state.in_hand);
-                        }                   
-                    }
+                        break :find_target_slot;
+                    }             
                 }
-            }
 
-            for(&self.ui_state.player_panel, 0..) |*ui_slot, i| {
-                if(ui_slot.mouse_over(mouse_position) and self.input.left_mouse) {
-                    const player_inventory_slot = &self.player.inventory[i];
+                switch (self.ui_state.current_open_panel) {
+                    .empty => break :panels,
+                    .miner_inventory => |*miner_inventory| {
+                        const miner_tile_data = self.get_tile_data(miner_inventory.tile_index) orelse {
+                            self.close_inventory();
+                            break :panels;
+                        };
+    
+                        if(miner_inventory.input_slot.mouse_over(mouse_position)) {
+                            target_slots = .{
+                                .ui_slot = &miner_inventory.input_slot,
+                                .slot = &miner_tile_data.data.miner.input
+                            };
 
-                    if(self.ui_state.in_hand.is_empty()) {
-                        player_inventory_slot.move_items_to(&self.ui_state.in_hand);
-                    } else if(!self.ui_state.in_hand.is_empty()) {
-                        self.ui_state.in_hand.move_items_to(player_inventory_slot);
+                            break :find_target_slot;
+                        }
+    
+                        if(miner_inventory.output_slot.mouse_over(mouse_position)) {
+                            target_slots = .{
+                                .ui_slot = &miner_inventory.output_slot,
+                                .slot = &miner_tile_data.data.miner.output
+                            };
+                            
+                            break :find_target_slot;
+                        }
+                    },
+                    .furnace_inventory => |*furnace_inventory| {
+                        const furnace_tile_data = self.get_tile_data(furnace_inventory.tile_index) orelse {
+                            self.close_inventory();
+                            break :panels;
+                        };
+
+                        if(furnace_inventory.input_fuel_slot.mouse_over(mouse_position)) {
+                            target_slots = .{
+                                .ui_slot = &furnace_inventory.input_fuel_slot,
+                                .slot = &furnace_tile_data.data.furnace.fuel_input
+                            };
+
+                            break :find_target_slot;
+                        }
+
+                        if(furnace_inventory.input_ingredient_slot.mouse_over(mouse_position)) {
+                            target_slots = .{
+                                .ui_slot = &furnace_inventory.input_ingredient_slot,
+                                .slot = &furnace_tile_data.data.furnace.ingredient_input
+                            };
+
+                            break :find_target_slot;
+                        }
+    
+                        if(furnace_inventory.output_slot.mouse_over(mouse_position)) {
+                            target_slots = .{
+                                .ui_slot = &furnace_inventory.output_slot,
+                                .slot = &furnace_tile_data.data.furnace.output
+                            };
+                            
+                            break :find_target_slot;
+                        }
+                    },
+                }
+            } 
+
+            if(target_slots == null) break :panels;
+
+            mouse_interaction: {
+                if(!(self.input.left_mouse or self.input.right_mouse)) {
+                    break :mouse_interaction;
+                }
+
+                const in_hand = &self.ui_state.in_hand;
+                const target_ui_slot = target_slots.?.ui_slot;
+                const target_game_slot = target_slots.?.slot;
+
+                if(in_hand.is_empty()) {
+                    if(self.input.left_mouse) {
+                        target_game_slot.move_items_to(in_hand);
+                    } else if(self.input.right_mouse) {
+                        target_game_slot.move_half_items_to(in_hand);
                     }
-                }             
+
+                } else {
+                    if(target_ui_slot.has_flag(only_take_flag)) {
+                        break :mouse_interaction;
+                    }
+
+                    if(target_ui_slot.has_flag(only_smeltable_flag) and !in_hand.item_type.?.can_be_smelted()) {
+                        break :mouse_interaction;
+                    }
+
+                    if(target_ui_slot.has_flag(only_fuel_flag) and !in_hand.item_type.?.can_be_fuel()) {
+                        break :mouse_interaction;
+                    }
+
+                    if(target_ui_slot.has_flag(only_placeable_flag) and !in_hand.item_type.?.can_be_placed()) {
+                        break :mouse_interaction;
+                    }
+
+                    if(self.input.left_mouse) {
+                        if(!target_game_slot.is_empty()) {
+
+                            if(target_game_slot.item_type == in_hand.item_type) {
+                                in_hand.move_items_to(target_game_slot);
+                            } else {
+                                in_hand.swap(target_game_slot);
+                            }
+                        } else {
+                            in_hand.move_items_to(target_game_slot);
+                        }
+                    } 
+                }
             }
         }
     }
@@ -1818,6 +1931,10 @@ const Game = struct {
 
         // tile place preview
         tile_preview: {
+            if(self.is_viewing_inventory()) {
+                break :tile_preview;
+            }
+
             const mouse_world_position = self.get_mouse_world_position();
             if(!mouse_world_position.in_world_bounds()) {
                 break :tile_preview;
@@ -1895,7 +2012,20 @@ const Game = struct {
 
             // draw player inventory
             for(&self.ui_state.player_panel, 0..) |*ui_slot, i| {
-                ui_slot.draw(&self.player.inventory[i], raylib.WHITE);
+                const color = switch (i) {
+                    0 => raylib.RED,
+                    1 => raylib.ORANGE,
+                    2 => raylib.YELLOW,
+                    3 => raylib.GREEN,
+                    4 => raylib.SKYBLUE,
+                    5 => raylib.BLUE,
+                    6 => raylib.VIOLET,
+                    7 => raylib.BROWN,
+                    8 => raylib.BLACK,
+                    else => raylib.WHITE
+                };
+
+                ui_slot.draw(&self.player.inventory[i], color);
             }
 
             // draw item in hand
@@ -1926,7 +2056,7 @@ const Game = struct {
             const padding = 5;
             const slot_y = window_height() - size - padding;
 
-            for(0..self.player.inventory.len) |i| {
+            for(0..9) |i| {
 
                 var color = switch (i) {
                     0 => raylib.RED,
@@ -1936,7 +2066,7 @@ const Game = struct {
                     4 => raylib.SKYBLUE,
                     5 => raylib.BLUE,
                     6 => raylib.VIOLET,
-                    7 => raylib.WHITE,
+                    7 => raylib.BROWN,
                     8 => raylib.BLACK,
                     else => unreachable
                 };
@@ -1988,6 +2118,13 @@ const Game = struct {
         }
 
         raylib.EndDrawing();
+    }
+
+    fn is_viewing_inventory(self: *const Self) bool {
+        return switch (self.ui_state.current_open_panel) {
+            .empty => false,
+            else => true,
+        };
     }
 
     fn open_inventory(self: *Self, tile_index: usize) void {
