@@ -26,7 +26,9 @@ const world_tile_height = 150;
 
 const max_item_stack = 99;
 
-const player_inventory_size = 9 * 6;
+const player_inventory_width = 9;
+const player_inventory_height = 9;
+const player_inventory_size = player_inventory_height * player_inventory_width;
 
 // images paths
 //
@@ -1365,8 +1367,8 @@ const UIPanel = union(enum) {
     fn miner_inventory(tile_index: usize) UIPanel {
         const slot_size = 50;
         
-        const input_slot_x = (window_width() * 0.5) - 100 - (slot_size * 0.5);
-        const output_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
+        const input_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
+        const output_slot_x = (window_width() * 0.5) + 300 - (slot_size * 0.5);
 
         const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
 
@@ -1444,9 +1446,11 @@ const UI = struct {
         {
             const padding = 5;
             const slot_size = 50;
-            const total_size = (9 * slot_size) + (8 * padding);
-            const start_x = (window_width() * 0.5) - (total_size * 0.5);
-            const start_y = 25;
+            const total_width = (player_inventory_width * slot_size) + ((player_inventory_width - 1) * padding);
+            const total_height = (player_inventory_height * slot_size) + ((player_inventory_height - 1) * padding);
+
+            const start_x = (window_width() * 0.5) - total_width - 20;
+            const start_y = (window_height() * 0.5) - (total_height * 0.5);
 
             for(&ui.player_panel, 0..) |*ui_slot, _i| {
                 const i = @as(f32, @floatFromInt(_i));
@@ -1554,6 +1558,7 @@ const Game = struct {
         game.player.inventory[9] = .{ .item_type = .coal, .count = 99 };
         game.player.inventory[10] = .{ .item_type = .coal, .count = 99 };
         game.player.inventory[11] = .{ .item_type = .coal, .count = 99 };
+        game.player.inventory[12] = .{ .item_type = .iron, .count = 99 };
         
         return game;
     }
@@ -1976,7 +1981,10 @@ const Game = struct {
                     break :game_ui_drawing;
                 },
                 .miner_inventory => |*miner_ui| {
-                    draw_texture_pro(item_slot_texture, window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.WHITE, true);
+                    const background_height = 300;
+                    const background_width = 400;
+
+                    draw_texture_pro(item_slot_texture, window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.WHITE, false);
     
                     if(self.forground_tiles[miner_ui.tile_index].tile != .miner) {
                         self.close_inventory();
@@ -1987,6 +1995,20 @@ const Game = struct {
                         self.close_inventory();
                         break :game_ui_drawing;
                     };
+
+                    const miner = &tile_data.data.miner;
+
+                    const progress_bar_width = 5;
+                    const fuel_progress_bar_x = miner_ui.input_slot.x - 10 - progress_bar_width;
+                    const fuel_progress_bar_y = miner_ui.input_slot.y;
+
+                    if(miner.fuel_item_in_use) |fuel_item| {
+                        draw_progress_bar_vertical(fuel_progress_bar_x, fuel_progress_bar_y, 10, miner_ui.input_slot.size, raylib.RED, raylib.ORANGE, miner.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.miner_max_progress);
+                    }
+
+                    const output_progress_bar_x = miner_ui.output_slot.x - 10 - progress_bar_width;
+                    const output_progress_bar_y = miner_ui.output_slot.y;
+                    draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, miner_ui.output_slot.size, raylib.BLUE, raylib.WHITE, miner.progress, Tile.miner_max_progress);
     
                     miner_ui.input_slot.draw(&tile_data.data.miner.input, raylib.BLUE);
                     miner_ui.output_slot.draw(&tile_data.data.miner.output, raylib.RED);
@@ -2003,6 +2025,22 @@ const Game = struct {
                         self.close_inventory();
                         break :game_ui_drawing;
                     };
+
+                    const furnace = &tile_data.data.furnace;
+                    
+                    const progress_bar_width = 5;
+
+                    const fuel_progress_bar_x = furnace_ui.input_fuel_slot.x - 10 - progress_bar_width;
+                    const fuel_progress_bar_y = furnace_ui.input_fuel_slot.y;
+
+                    if(furnace.fuel_item_in_use) |fuel_item| {
+                        draw_progress_bar_vertical(fuel_progress_bar_x, fuel_progress_bar_y, 10, furnace_ui.input_fuel_slot.size, raylib.RED, raylib.ORANGE, furnace.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.furnace_max_progress);
+                    }
+
+                    const output_progress_bar_x = furnace_ui.output_slot.x - 10 - progress_bar_width;
+                    const output_progress_bar_y = furnace_ui.output_slot.y;
+
+                    draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, furnace_ui.output_slot.size, raylib.BLUE, raylib.WHITE, furnace.progress, Tile.furnace_max_progress);
 
                     furnace_ui.input_ingredient_slot.draw(&tile_data.data.furnace.ingredient_input, raylib.BLUE);
                     furnace_ui.input_fuel_slot.draw(&tile_data.data.furnace.fuel_input, raylib.BLUE);
