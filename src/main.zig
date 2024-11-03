@@ -30,6 +30,8 @@ const player_inventory_width = 9;
 const player_inventory_height = 9;
 const player_inventory_size = player_inventory_height * player_inventory_width;
 
+const debug_network_id = true;
+
 // images paths
 //
 // TILES
@@ -46,6 +48,8 @@ const pipe_image_path = "tiles/pipe.png";
 const pipe_left_image_path = "tiles/pipe_left.png";
 const pipe_right_image_path = "tiles/pipe_right.png";
 const pipe_merger_image_path = "tiles/pipe_merger.png";
+const pole_image_path = "tiles/pole.png";
+const battery_image_path = "tiles/battery.png";
 
 // ITEMS
 const iron_item_image_path = "items/iron.png";
@@ -72,6 +76,8 @@ var pipe_tile_texture: raylib.Texture = undefined;
 var pipe_left_tile_texture: raylib.Texture = undefined;
 var pipe_right_tile_texture: raylib.Texture = undefined;
 var pipe_merger_tile_texture: raylib.Texture = undefined;
+var pole_tile_texture: raylib.Texture = undefined;
+var battery_tile_texture: raylib.Texture = undefined;
 
 // ITEMS
 var iron_item_texture: raylib.Texture = undefined;
@@ -329,6 +335,20 @@ const Direction = enum(u8){
     }
 };
 
+const NetworkNode = struct {
+    const Self = @This();
+
+    tile_index: usize,
+    network_id: usize,
+
+    fn init(tile_index: usize) Self {
+        return Self {
+            .tile_index = tile_index,
+            .network_id = 0
+        };
+    }
+};
+
 const ForgroundTile = struct {
     tile: Tile, direction: Direction
 };
@@ -354,6 +374,15 @@ const Tile = enum(u8) {
     pipe,
     pipe_merger,
     extractor,
+    pole,
+    battery,
+
+    fn is_network_node(self: *const Self) bool {
+        return switch (self.*) {
+            .pole, .battery=> true,
+            else => false,
+        };
+    }
 
     fn has_clickable_ui(self: *const Self) bool {
         return switch (self.*) {
@@ -418,6 +447,8 @@ const Tile = enum(u8) {
             .tree_base, .tree_0 => .wood,
             .pipe => .pipe,
             .extractor => .extractor,
+            .pole => .pole,
+            .battery => .battery,
             else => null,
         };
     }
@@ -425,7 +456,7 @@ const Tile = enum(u8) {
     fn get_texture(self: *const Self, tile_index: usize, game: *const Game) raylib.Texture {
         return switch (self.*) {
             .pipe => {
-                const pipe = &game.get_tile_data(tile_index).?.data.pipe;
+                const pipe = &game.get_tile_data(tile_index).data.pipe;
                 return switch (pipe.relative_output_direction) {
                     .up => pipe_tile_texture,
                     .left => pipe_left_tile_texture,
@@ -450,7 +481,9 @@ const Tile = enum(u8) {
             .tree_0 => tree_0_tile_texture,
             .pipe => pipe_tile_texture,
             .pipe_merger => pipe_merger_tile_texture,
-            .extractor => extractor_tile_texture
+            .extractor => extractor_tile_texture,
+            .pole => pole_tile_texture,
+            .battery => battery_tile_texture
         };
     }
 
@@ -677,7 +710,7 @@ const Tile = enum(u8) {
 
                     var output_tile_data: ?*TileData = null;  
                     if(output_tile.has_tile_data()) {
-                        output_tile_data = game.get_tile_data(output_index) orelse unreachable; // has_tile_data is true so this needs to not be null
+                        output_tile_data = game.get_tile_data(output_index);
                     }
 
                     for(&pipe.storage) |*slot| {
@@ -721,7 +754,7 @@ const Tile = enum(u8) {
 
                     var input_tile_data: ?*TileData = null;  
                     if(input_tile.has_tile_data()) {
-                        input_tile_data = game.get_tile_data(input_index) orelse unreachable; // has_tile_data is true so this needs to not be null
+                        input_tile_data = game.get_tile_data(input_index);
                     }
 
                     const input_item = input_tile.extractor_take(input_index, input_tile_data, game);
@@ -748,7 +781,7 @@ const Tile = enum(u8) {
 
                     var output_tile_data: ?*TileData = null;  
                     if(output_tile.has_tile_data()) {
-                        output_tile_data = game.get_tile_data(output_index) orelse unreachable; // has_tile_data is true so this needs to not be null
+                        output_tile_data = game.get_tile_data(output_index);
                     }
 
                     if(output_tile.pipe_give(extractor.item.?, tile_index, output_index, output_tile_data, game)) {
@@ -881,7 +914,7 @@ const Tile = enum(u8) {
 
     }
 
-    fn get_default_tile_data(self: *const Self) ?TileData {
+    fn get_default_tile_data(self: *const Self) TileData {
         return switch (self.*) {
             .miner => TileData{
                 .tile_index = 0,
@@ -924,7 +957,7 @@ const Tile = enum(u8) {
                     }
                 },
             },
-            .pipe => TileData{
+            .pipe, .pipe_merger => TileData{
                 .tile_index = 0,
                 .data = .{
                     .pipe = .{
@@ -933,7 +966,6 @@ const Tile = enum(u8) {
                     },
                 },
             },
-            .pipe_merger => Tile.pipe.get_default_tile_data(),
             .extractor => TileData{
                 .tile_index = 0,
                 .data = .{
@@ -942,7 +974,7 @@ const Tile = enum(u8) {
                     },
                 },
             },
-            else => null,
+            else => std.debug.panic("trying to get default tile data of a tile that has none: {}\n", .{self.*}),
         };
     }
 };
@@ -1010,6 +1042,8 @@ const Item = enum {
     pipe,
     pipe_merger,
     extractor,
+    pole,
+    battery,
 
     fn can_be_fuel(self: *const Self) bool {
         return switch (self.*) {  
@@ -1051,7 +1085,9 @@ const Item = enum {
             .wood => wood_item_texture,
             .pipe => pipe_tile_texture,
             .pipe_merger => pipe_merger_tile_texture,
-            .extractor => extractor_tile_texture
+            .extractor => extractor_tile_texture,
+            .pole => pole_tile_texture,
+            .battery => battery_tile_texture
         };
     }
 
@@ -1066,13 +1102,15 @@ const Item = enum {
             .pipe => .pipe,
             .pipe_merger => .pipe_merger,
             .extractor => .extractor,
+            .pole => .pole,
+            .battery => .battery,
             else => null,
         };
     }
 
     fn can_be_placed(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .pipe, .pipe_merger, .extractor => true,
+            .miner, .furnace, .pipe, .pipe_merger, .extractor, .pole, .battery => true,
             else => false,
         };
     }
@@ -1498,8 +1536,10 @@ const Game = struct {
     background_tiles: []Tile,
     forground_tiles: []ForgroundTile,
     tile_data: std.ArrayList(TileData),
+    network_nodes: std.ArrayList(NetworkNode),
     world_gen_noise: fastnoise.Noise(f32),
     allocator: std.mem.Allocator,
+    scratch_space: std.heap.FixedBufferAllocator,
     tick_timer: f32,
     ui_state: UI,
 
@@ -1531,6 +1571,7 @@ const Game = struct {
             .background_tiles = background_tiles,
             .forground_tiles = forground_tiles,
             .tile_data = std.ArrayList(TileData).init(allocator),
+            .network_nodes = std.ArrayList(NetworkNode).init(allocator),
             .world_gen_noise = fastnoise.Noise(f32) {
                 .seed = 1337,
                 .noise_type = .perlin,
@@ -1544,6 +1585,7 @@ const Game = struct {
                 .octaves = 2
             },
             .allocator = allocator,
+            .scratch_space = undefined,
             .tick_timer = 0,
             .ui_state = UI.init(),
         };
@@ -1554,6 +1596,8 @@ const Game = struct {
         game.player.inventory[2] = .{ .item_type = .pipe, .count = 99 };
         game.player.inventory[3] = .{ .item_type = .pipe_merger, .count = 99 };
         game.player.inventory[6] = .{ .item_type = .furnace, .count = 99 };
+        game.player.inventory[7] = .{ .item_type = .pole, .count = 99 };
+        game.player.inventory[8] = .{ .item_type = .battery, .count = 99 };
 
         game.player.inventory[9] = .{ .item_type = .coal, .count = 99 };
         game.player.inventory[10] = .{ .item_type = .coal, .count = 99 };
@@ -1564,10 +1608,14 @@ const Game = struct {
     }
 
     fn run(self: *Self) void {
+        var scratch_space: [1024]u8 = undefined;
+        self.scratch_space = std.heap.FixedBufferAllocator.init(scratch_space[0..]);
+
         while (!raylib.WindowShouldClose()) {
             self.get_input();
             self.update(raylib.GetFrameTime());
             self.draw();
+            self.scratch_space.reset();
         }
 
         raylib.CloseWindow();
@@ -1746,11 +1794,13 @@ const Game = struct {
                 switch (self.ui_state.current_open_panel) {
                     .empty => break :panels,
                     .miner_inventory => |*miner_inventory| {
-                        const miner_tile_data = self.get_tile_data(miner_inventory.tile_index) orelse {
+                        if(self.forground_tiles[miner_inventory.tile_index].tile != .miner) {
                             self.close_inventory();
                             break :panels;
-                        };
-    
+                        }
+
+                        const miner_tile_data = self.get_tile_data(miner_inventory.tile_index);
+
                         if(miner_inventory.input_slot.mouse_over(mouse_position)) {
                             target_slots = .{
                                 .ui_slot = &miner_inventory.input_slot,
@@ -1770,10 +1820,12 @@ const Game = struct {
                         }
                     },
                     .furnace_inventory => |*furnace_inventory| {
-                        const furnace_tile_data = self.get_tile_data(furnace_inventory.tile_index) orelse {
+                        if(self.forground_tiles[furnace_inventory.tile_index].tile != .furnace) {
                             self.close_inventory();
                             break :panels;
-                        };
+                        }
+
+                        const furnace_tile_data = self.get_tile_data(furnace_inventory.tile_index);
 
                         if(furnace_inventory.input_fuel_slot.mouse_over(mouse_position)) {
                             target_slots = .{
@@ -1895,7 +1947,7 @@ const Game = struct {
                 if(forground_tile.tile == .pipe) {
                     const icon_size = 12;
     
-                    const pipe = &self.get_tile_data(i).?.data.pipe;
+                    const pipe = &self.get_tile_data(i).data.pipe;
     
                     // only drawing items for straight pipes
                     if(pipe.relative_output_direction != .up) {
@@ -1932,6 +1984,12 @@ const Game = struct {
             }
 
             draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
+
+            if(debug_network_id and forground_tile.tile.is_network_node()) {
+                const node = self.get_network_node(i);
+                const string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "{}", .{node.network_id}) catch unreachable;
+                draw_text(string, world_position.x, world_position.y, 10, raylib.RED);
+            }
         }
 
         // tile place preview
@@ -1991,12 +2049,7 @@ const Game = struct {
                         break :game_ui_drawing;
                     }
     
-                    const tile_data = self.get_tile_data(miner_ui.tile_index) orelse {
-                        self.close_inventory();
-                        break :game_ui_drawing;
-                    };
-
-                    const miner = &tile_data.data.miner;
+                    const miner = &self.get_tile_data(miner_ui.tile_index).data.miner;
 
                     const progress_bar_width = 5;
                     const fuel_progress_bar_x = miner_ui.input_slot.x - 10 - progress_bar_width;
@@ -2010,8 +2063,8 @@ const Game = struct {
                     const output_progress_bar_y = miner_ui.output_slot.y;
                     draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, miner_ui.output_slot.size, raylib.BLUE, raylib.WHITE, miner.progress, Tile.miner_max_progress);
     
-                    miner_ui.input_slot.draw(&tile_data.data.miner.input, raylib.BLUE);
-                    miner_ui.output_slot.draw(&tile_data.data.miner.output, raylib.RED);
+                    miner_ui.input_slot.draw(&miner.input, raylib.BLUE);
+                    miner_ui.output_slot.draw(&miner.output, raylib.RED);
                 },
                 .furnace_inventory => |*furnace_ui| {
                     draw_texture_pro(item_slot_texture, window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.ORANGE, true);
@@ -2021,12 +2074,7 @@ const Game = struct {
                         break :game_ui_drawing;
                     }
     
-                    const tile_data = self.get_tile_data(furnace_ui.tile_index) orelse {
-                        self.close_inventory();
-                        break :game_ui_drawing;
-                    };
-
-                    const furnace = &tile_data.data.furnace;
+                    const furnace = &self.get_tile_data(furnace_ui.tile_index).data.furnace;
                     
                     const progress_bar_width = 5;
 
@@ -2042,9 +2090,9 @@ const Game = struct {
 
                     draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, furnace_ui.output_slot.size, raylib.BLUE, raylib.WHITE, furnace.progress, Tile.furnace_max_progress);
 
-                    furnace_ui.input_ingredient_slot.draw(&tile_data.data.furnace.ingredient_input, raylib.BLUE);
-                    furnace_ui.input_fuel_slot.draw(&tile_data.data.furnace.fuel_input, raylib.BLUE);
-                    furnace_ui.output_slot.draw(&tile_data.data.furnace.output, raylib.RED);
+                    furnace_ui.input_ingredient_slot.draw(&furnace.ingredient_input, raylib.BLUE);
+                    furnace_ui.input_fuel_slot.draw(&furnace.fuel_input, raylib.BLUE);
+                    furnace_ui.output_slot.draw(&furnace.output, raylib.RED);
                 }
             }
 
@@ -2208,13 +2256,22 @@ const Game = struct {
             return null;
         }
 
-        const tile_data = self.get_tile_data(tile_index);
+        const tile_data: ?*TileData = if(replcaing_tile.has_tile_data()) self.get_tile_data(tile_index) else null;
         replcaing_tile.removed_update(tile_index, tile_data, self);
 
         if(tile_data) |value| {
             for(0..self.tile_data.items.len) |i| {
                 if(self.tile_data.items[i].tile_index == value.tile_index) {
                     _ = self.tile_data.swapRemove(i);
+                    break;
+                }
+            }
+        }
+
+        if(replcaing_tile.is_network_node()) {
+            for(0..self.network_nodes.items.len) |i| {
+                if(self.network_nodes.items[i].tile_index == tile_index) {
+                    _ = self.network_nodes.swapRemove(i);
                     break;
                 }
             }
@@ -2227,7 +2284,7 @@ const Game = struct {
 
     // places a tile in a given index in the foreground
     // if the tile is not air *not empty* then it is
-    // not places and false is returned
+    // not placed and false is returned
     fn place_tile_in_foreground(self: *Self, tile_index: usize, tile: Tile) bool {
         if(self.forground_tiles[tile_index].tile != .air) {
             return false;
@@ -2236,24 +2293,34 @@ const Game = struct {
         const direction = if(tile.has_direction()) self.player.placement_dirction else .down;
         self.forground_tiles[tile_index] = .{.tile = tile, .direction = direction};
 
-        var tile_data = tile.get_default_tile_data();
-        if(tile_data != null) {
-            tile_data.?.tile_index = tile_index;
+        if(tile.has_tile_data()) {
+            var tile_data = tile.get_default_tile_data();
+            tile_data.tile_index = tile_index;
 
-            self.tile_data.append(tile_data.?) catch |err| {
+            self.tile_data.append(tile_data) catch |err| {
                 switch (err) {          
                     error.OutOfMemory => {
                         std.debug.panic("out of memory creating new tile data {}", .{err});
                     }
                 }
             };
-
         }
 
-        if(tile_data == null) {
-            tile.tile_update(tile_index, null, self);
-        } else {
+        if(tile.is_network_node()) {
+            const node = NetworkNode.init(tile_index);
+            self.network_nodes.append(node) catch |err| {
+                switch (err) {          
+                    error.OutOfMemory => {
+                        std.debug.panic("out of memory creating new network node {}", .{err});
+                    }
+                }
+            };
+        }
+
+        if(tile.has_tile_data()) {
             tile.tile_update(tile_index, &self.tile_data.items[self.tile_data.items.len - 1], self);
+        } else {
+            tile.tile_update(tile_index, null, self);
         }
 
         self.tile_update_adjectcent_tiles(tile_index);
@@ -2280,15 +2347,27 @@ const Game = struct {
 
             var target_tile_data: ?*TileData = undefined;
             if(target_tile.has_tile_data()) {
-                target_tile_data = self.get_tile_data(target_index) orelse unreachable;
+                target_tile_data = self.get_tile_data(target_index);
             }
 
             self.forground_tiles[target_index].tile.tile_update(target_index, target_tile_data, self);
         }
     }
 
+    fn get_network_node(self: *const Self, tile_index: usize) *NetworkNode {
+        for(self.network_nodes.items) |*node| {
+            if(node.tile_index == tile_index) {
+                // this pointer should not be stored across frames
+                // if the tile data buffer changes the underlying
+                // memory could become invalid or change
+                return node;
+            }
+        }
 
-    fn get_tile_data(self: *const Self, tile_index: usize) ?*TileData {
+        std.debug.panic("tried to get network node at index: {} and failed\n", .{tile_index});
+    }
+
+    fn get_tile_data(self: *const Self, tile_index: usize) *TileData {
         for(self.tile_data.items) |*tile_data| {
             if(tile_data.tile_index == tile_index) {
                 // this pointer should not be stored across frames
@@ -2298,7 +2377,7 @@ const Game = struct {
             }
         }
 
-        return null;
+        std.debug.panic("tried to get tile data at index: {} and failed\n", .{tile_index});
     }
 
     fn generate_world(self: *Game) void {
@@ -2501,7 +2580,6 @@ fn load_texture(relative_texture_path: []const u8) !raylib.Texture {
 }
 
 pub fn main() !void {
-
     var game_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer game_arena.deinit();
  
@@ -2521,7 +2599,9 @@ pub fn main() !void {
     pipe_tile_texture =         try load_texture(pipe_image_path);
     pipe_left_tile_texture =    try load_texture(pipe_left_image_path);
     pipe_right_tile_texture =   try load_texture(pipe_right_image_path);
-    pipe_merger_tile_texture =   try load_texture(pipe_merger_image_path);
+    pipe_merger_tile_texture =  try load_texture(pipe_merger_image_path);
+    pole_tile_texture =         try load_texture(pole_image_path);
+    battery_tile_texture =      try load_texture(battery_image_path);
 
     // item texture setup
     iron_item_texture =         try load_texture(iron_item_image_path);
