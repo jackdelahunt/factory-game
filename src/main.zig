@@ -18,8 +18,8 @@ const player_speed: f32 = 450;
 const default_screen_width = 1400;
 const default_screen_height = 1000;
 
-const tile_width: i64 = 24;
-const tile_height: i64 = 24;
+const tile_width: i64 = 16;
+const tile_height: i64 = 16;
 
 const world_tile_width = 150;
 const world_tile_height = 150;
@@ -50,6 +50,7 @@ const pipe_right_image_path = "tiles/pipe_right.png";
 const pipe_merger_image_path = "tiles/pipe_merger.png";
 const pole_image_path = "tiles/pole.png";
 const battery_image_path = "tiles/battery.png";
+const crusher_image_path = "tiles/crusher.png";
 
 // ITEMS
 const iron_item_image_path = "items/iron.png";
@@ -78,6 +79,7 @@ var pipe_right_tile_texture: raylib.Texture = undefined;
 var pipe_merger_tile_texture: raylib.Texture = undefined;
 var pole_tile_texture: raylib.Texture = undefined;
 var battery_tile_texture: raylib.Texture = undefined;
+var crusher_tile_texture: raylib.Texture = undefined;
 
 // ITEMS
 var iron_item_texture: raylib.Texture = undefined;
@@ -335,6 +337,27 @@ const Direction = enum(u8){
     }
 };
 
+const Network = struct {
+    const Self = @This();
+
+    network_id: usize,
+    available_power: usize,
+
+    fn init(network_id: usize) Self {
+        return Self {
+            .network_id = network_id,
+            .available_power = 0,
+        };
+    }
+
+    fn consume_power(self: *Self, power: usize) bool {
+        if(power > self.available_power) return false;
+
+        self.available_power -= power;
+        return true;
+    }
+};
+
 const NetworkNode = struct {
     const Self = @This();
 
@@ -358,6 +381,7 @@ const Tile = enum(u8) {
 
     const miner_max_progress    = 10 * 3;
     const furnace_max_progress  = 10 * 3;
+    const crusher_max_progress  = 10 * 2;
     const pipe_max_progress     = 30 * 1;
 
     const pipe_to_slot_count_cutoff = 5;
@@ -376,17 +400,25 @@ const Tile = enum(u8) {
     extractor,
     pole,
     battery,
+    crusher,
 
     fn is_network_node(self: *const Self) bool {
         return switch (self.*) {
-            .pole, .battery=> true,
+            .pole, .battery, .crusher => true,
+            else => false,
+        };
+    }
+
+    fn is_network_generator(self: *const Self) bool {
+        return switch (self.*) {
+            .battery=> true,
             else => false,
         };
     }
 
     fn has_clickable_ui(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace=> true,
+            .miner, .furnace, .crusher => true,
             else => false,
         };
     }
@@ -449,6 +481,7 @@ const Tile = enum(u8) {
             .extractor => .extractor,
             .pole => .pole,
             .battery => .battery,
+            .crusher => .crusher,
             else => null,
         };
     }
@@ -483,13 +516,14 @@ const Tile = enum(u8) {
             .pipe_merger => pipe_merger_tile_texture,
             .extractor => extractor_tile_texture,
             .pole => pole_tile_texture,
-            .battery => battery_tile_texture
+            .battery => battery_tile_texture,
+            .crusher => crusher_tile_texture,
         };
     }
 
     fn has_tile_data(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .pipe, .pipe_merger, .extractor => true,
+            .miner, .furnace, .pipe, .pipe_merger, .extractor, .crusher => true,
             else => false,
         };
     }
@@ -619,7 +653,7 @@ const Tile = enum(u8) {
 
 
     // update called every tick
-    fn tick_update(self: Self, tile_index: usize, tile_data: ?*TileData, game: *const Game) void {
+    fn tick_update(self: Self, tile_index: usize, tile_data: ?*TileData, game: *Game) void {
         switch (self) {
             .miner => {
                 var miner = &tile_data.?.data.miner;
@@ -789,9 +823,44 @@ const Tile = enum(u8) {
                     }
                 }
             },
+            .crusher => {
+                var crusher = &tile_data.?.data.crusher;
+                const node = game.get_network_node(tile_index);
+                var network = game.get_network(node.network_id);
+
+
+                { // mining logic
+                    if(crusher.input.is_empty() or !network.consume_power(20)) {
+                        crusher.progress = 0;
+                        return;
+                    }
+    
+                        crusher.progress += 1;
+                        if(crusher.progress >= Tile.crusher_max_progress) {
+                            crusher.progress = 0;
+    
+                            const item = crusher.input.item_type.?.item_when_crushed() orelse unreachable;
+                            crusher.output.item_type = item;
+                            crusher.output.count += 1;
+
+                            _ = crusher.input.take_amount(1);
+                        }
+                    }
+            },
             else => {},
         }
     }
+
+    // called before the regular tick update, returns the amount of power that this tile
+    // is generating for the current tick (just after this one)
+    fn tick_network_generator_amount(self: Self, game: *const Game) usize {
+        _ = game; // autofix
+        return switch (self) {
+            .battery => 100,
+            else => std.debug.panic("tried to get power generator amount from a non-generator\n", .{})
+        };
+    }
+
 
     fn extractor_take(self: Self, tile_index: usize, tile_data: ?*TileData, game: *const Game) ?Item {
         _ = tile_index; // autofix
@@ -974,6 +1043,22 @@ const Tile = enum(u8) {
                     },
                 },
             },
+            .crusher => TileData{
+                .tile_index = 0,
+                .data = .{
+                    .crusher =.{
+                        .input = InventorySlot{
+                            .item_type = null,
+                            .count = 0,
+                        },
+                        .output = InventorySlot{
+                            .item_type = null,
+                            .count = 0,
+                        },
+                        .progress = 0,
+                    },
+                },
+            },
             else => std.debug.panic("trying to get default tile data of a tile that has none: {}\n", .{self.*}),
         };
     }
@@ -1026,6 +1111,11 @@ const TileData = struct {
         extractor: struct {
             item: ?Item,
         },
+        crusher: struct{
+            input: InventorySlot,
+            output: InventorySlot,
+            progress: i64,
+        },
     },
 };
 
@@ -1044,6 +1134,7 @@ const Item = enum {
     extractor,
     pole,
     battery,
+    crusher,
 
     fn can_be_fuel(self: *const Self) bool {
         return switch (self.*) {  
@@ -1074,6 +1165,20 @@ const Item = enum {
         };
     }
 
+    fn can_be_crushed(self: *const Self) bool {
+        return switch (self.*) {  
+            .iron => true,
+            else => false,
+        };
+    }
+
+    fn item_when_crushed(self: *const Self) ?Item {
+        return switch (self.*) {  
+            .iron => .coal,
+            else => null,
+        };
+    }
+
     fn get_texture(self: *const Self) raylib.Texture {
         return switch (self.*) {  
             .iron => iron_item_texture,
@@ -1087,7 +1192,8 @@ const Item = enum {
             .pipe_merger => pipe_merger_tile_texture,
             .extractor => extractor_tile_texture,
             .pole => pole_tile_texture,
-            .battery => battery_tile_texture
+            .battery => battery_tile_texture,
+            .crusher => crusher_tile_texture,
         };
     }
 
@@ -1104,13 +1210,14 @@ const Item = enum {
             .extractor => .extractor,
             .pole => .pole,
             .battery => .battery,
+            .crusher => .crusher,
             else => null,
         };
     }
 
     fn can_be_placed(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .pipe, .pipe_merger, .extractor, .pole, .battery => true,
+            .miner, .furnace, .pipe, .pipe_merger, .extractor, .pole, .battery, .crusher => true,
             else => false,
         };
     }
@@ -1349,6 +1456,7 @@ const only_smeltable_flag: u8     = 0b00000001;
 const only_fuel_flag: u8          = 0b00000010;
 const only_take_flag: u8          = 0b00000100;
 const only_placeable_flag: u8     = 0b00001000;
+const only_crushable_flag: u8     = 0b00010000;
 
 const UIIInventorySlot = struct {
     const Self = @This();
@@ -1358,7 +1466,7 @@ const UIIInventorySlot = struct {
     size: f32,
     flags: u8,
 
-    fn draw(self: *const Self, inventory_slot: *const InventorySlot, tint: raylib.Color) void {
+    fn draw(self: *const Self, inventory_slot: *const InventorySlot, tint: raylib.Color, allocator: std.mem.Allocator) void {
         draw_texture_tint(item_slot_texture, self.x, self.y, self.size, self.size, tint);
 
         if(inventory_slot.item_type) |item| {                     
@@ -1366,8 +1474,7 @@ const UIIInventorySlot = struct {
             draw_texture(item_texture, self.x, self.y, self.size, self.size);
             
             // max size is 99 so 2 bytes is fine here
-            var text_buffer = std.mem.zeroes([2]u8);
-            const string = std.fmt.bufPrint(text_buffer[0..], "{}", .{inventory_slot.count}) catch unreachable;
+            const string = std.fmt.allocPrintZ(allocator, "{}", .{inventory_slot.count}) catch unreachable;
             draw_text(string, self.x, self.y, 20, raylib.WHITE);
         }
     }
@@ -1393,6 +1500,11 @@ const UIPanel = union(enum) {
         tile_index: usize,
         input_fuel_slot: UIIInventorySlot,
         input_ingredient_slot: UIIInventorySlot,
+        output_slot: UIIInventorySlot,
+    },
+    crusher_inventory: struct {
+        tile_index: usize,
+        input_slot: UIIInventorySlot,
         output_slot: UIIInventorySlot,
     },
 
@@ -1452,6 +1564,33 @@ const UIPanel = union(enum) {
                     .y = slot_y,
                     .size = slot_size,
                     .flags = only_smeltable_flag
+                },
+                .output_slot = .{
+                    .x = output_slot_x,
+                    .y = slot_y,
+                    .size = slot_size,
+                    .flags = only_take_flag
+                }
+            }
+        };   
+    }
+
+    fn crusher_inventory(tile_index: usize) UIPanel {
+        const slot_size = 50;
+        
+        const input_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
+        const output_slot_x = (window_width() * 0.5) + 300 - (slot_size * 0.5);
+
+        const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
+
+        return UIPanel{
+            .crusher_inventory = .{
+                .tile_index = tile_index,
+                .input_slot = .{
+                    .x = input_slot_x,
+                    .y = slot_y,
+                    .size = slot_size,
+                    .flags = only_crushable_flag,
                 },
                 .output_slot = .{
                     .x = output_slot_x,
@@ -1537,6 +1676,7 @@ const Game = struct {
     forground_tiles: []ForgroundTile,
     tile_data: std.ArrayList(TileData),
     network_nodes: std.ArrayList(NetworkNode),
+    root_network: Network,
     world_gen_noise: fastnoise.Noise(f32),
     allocator: std.mem.Allocator,
     scratch_space: std.heap.FixedBufferAllocator,
@@ -1572,6 +1712,7 @@ const Game = struct {
             .forground_tiles = forground_tiles,
             .tile_data = std.ArrayList(TileData).init(allocator),
             .network_nodes = std.ArrayList(NetworkNode).init(allocator),
+            .root_network = Network.init(0),
             .world_gen_noise = fastnoise.Noise(f32) {
                 .seed = 1337,
                 .noise_type = .perlin,
@@ -1595,6 +1736,7 @@ const Game = struct {
         game.player.inventory[1] = .{ .item_type = .extractor, .count = 99 };
         game.player.inventory[2] = .{ .item_type = .pipe, .count = 99 };
         game.player.inventory[3] = .{ .item_type = .pipe_merger, .count = 99 };
+        game.player.inventory[4] = .{ .item_type = .crusher, .count = 99 };
         game.player.inventory[6] = .{ .item_type = .furnace, .count = 99 };
         game.player.inventory[7] = .{ .item_type = .pole, .count = 99 };
         game.player.inventory[8] = .{ .item_type = .battery, .count = 99 };
@@ -1608,13 +1750,22 @@ const Game = struct {
     }
 
     fn run(self: *Self) void {
-        var scratch_space: [1024]u8 = undefined;
+        var scratch_space: []u8 = self.allocator.alloc(u8, 1024) catch |err| switch (err) {
+            error.OutOfMemory => {
+                std.debug.panic("out of memory when allocating scratch space :[\n", .{});
+            }
+        };
+
         self.scratch_space = std.heap.FixedBufferAllocator.init(scratch_space[0..]);
 
         while (!raylib.WindowShouldClose()) {
             self.get_input();
             self.update(raylib.GetFrameTime());
             self.draw();
+            
+            if(false) {
+                std.debug.print("scratch use {}/{}\n", .{self.scratch_space.end_index, self.scratch_space.buffer.len});
+            }
             self.scratch_space.reset();
         }
 
@@ -1647,6 +1798,22 @@ const Game = struct {
         self.input.left_shift = raylib.IsKeyDown(raylib.KEY_LEFT_SHIFT);
     }
 
+    fn power_update(self: *Self) void {
+        // reset network power
+        self.root_network.available_power = 0;
+
+        for(self.network_nodes.items) |*node| {
+            const tile = self.forground_tiles[node.tile_index].tile;
+
+            if(!tile.is_network_generator()) {
+                continue;
+            }
+
+            var network = self.get_network(node.network_id);
+            network.available_power += tile.tick_network_generator_amount(self);
+        }
+    }
+
     fn tick_update(self: *Self) void {
         for(self.tile_data.items) |*tile_data| {
             self.forground_tiles[tile_data.tile_index].tile.tick_update(tile_data.tile_index, tile_data, self);
@@ -1657,6 +1824,7 @@ const Game = struct {
         self.tick_timer += delta_time;
         if(self.tick_timer >= 0.1) {
             self.tick_timer = 0;
+            self.power_update();
             self.tick_update();
         }
 
@@ -1854,6 +2022,32 @@ const Game = struct {
                             break :find_target_slot;
                         }
                     },
+                    .crusher_inventory => |*crusher_inventory| {
+                        if(self.forground_tiles[crusher_inventory.tile_index].tile != .crusher) {
+                            self.close_inventory();
+                            break :panels;
+                        }
+
+                        const crusher_tile_data = self.get_tile_data(crusher_inventory.tile_index);
+
+                        if(crusher_inventory.input_slot.mouse_over(mouse_position)) {
+                            target_slots = .{
+                                .ui_slot = &crusher_inventory.input_slot,
+                                .slot = &crusher_tile_data.data.crusher.input
+                            };
+
+                            break :find_target_slot;
+                        }
+    
+                        if(crusher_inventory.output_slot.mouse_over(mouse_position)) {
+                            target_slots = .{
+                                .ui_slot = &crusher_inventory.output_slot,
+                                .slot = &crusher_tile_data.data.crusher.output
+                            };
+                            
+                            break :find_target_slot;
+                        }
+                    },
                 }
             } 
 
@@ -1889,6 +2083,10 @@ const Game = struct {
                     }
 
                     if(target_ui_slot.has_flag(only_placeable_flag) and !in_hand.item_type.?.can_be_placed()) {
+                        break :mouse_interaction;
+                    }
+
+                    if(target_ui_slot.has_flag(only_crushable_flag) and !in_hand.item_type.?.can_be_crushed()) {
                         break :mouse_interaction;
                     }
 
@@ -1985,10 +2183,12 @@ const Game = struct {
 
             draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
 
-            if(debug_network_id and forground_tile.tile.is_network_node()) {
-                const node = self.get_network_node(i);
-                const string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "{}", .{node.network_id}) catch unreachable;
-                draw_text(string, world_position.x, world_position.y, 10, raylib.RED);
+            if(debug_network_id) {
+                if(forground_tile.tile.is_network_node()) {
+                    const node = self.get_network_node(i);
+                    const string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "{}", .{node.network_id}) catch unreachable;
+                    draw_text(string, world_position.x, world_position.y, 10, raylib.RED);
+                }
             }
         }
 
@@ -2042,7 +2242,7 @@ const Game = struct {
                     const background_height = 300;
                     const background_width = 400;
 
-                    draw_texture_pro(item_slot_texture, window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.WHITE, false);
+                    draw_texture_pro(item_slot_texture, window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.BLACK, false);
     
                     if(self.forground_tiles[miner_ui.tile_index].tile != .miner) {
                         self.close_inventory();
@@ -2063,8 +2263,8 @@ const Game = struct {
                     const output_progress_bar_y = miner_ui.output_slot.y;
                     draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, miner_ui.output_slot.size, raylib.BLUE, raylib.WHITE, miner.progress, Tile.miner_max_progress);
     
-                    miner_ui.input_slot.draw(&miner.input, raylib.BLUE);
-                    miner_ui.output_slot.draw(&miner.output, raylib.RED);
+                    miner_ui.input_slot.draw(&miner.input, raylib.BLUE, self.scratch_space.allocator());
+                    miner_ui.output_slot.draw(&miner.output, raylib.RED, self.scratch_space.allocator());
                 },
                 .furnace_inventory => |*furnace_ui| {
                     draw_texture_pro(item_slot_texture, window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.ORANGE, true);
@@ -2090,10 +2290,26 @@ const Game = struct {
 
                     draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, furnace_ui.output_slot.size, raylib.BLUE, raylib.WHITE, furnace.progress, Tile.furnace_max_progress);
 
-                    furnace_ui.input_ingredient_slot.draw(&furnace.ingredient_input, raylib.BLUE);
-                    furnace_ui.input_fuel_slot.draw(&furnace.fuel_input, raylib.BLUE);
-                    furnace_ui.output_slot.draw(&furnace.output, raylib.RED);
-                }
+                    furnace_ui.input_ingredient_slot.draw(&furnace.ingredient_input, raylib.BLUE, self.scratch_space.allocator());
+                    furnace_ui.input_fuel_slot.draw(&furnace.fuel_input, raylib.BLUE, self.scratch_space.allocator());
+                    furnace_ui.output_slot.draw(&furnace.output, raylib.RED, self.scratch_space.allocator());
+                },
+                .crusher_inventory => |*crusher_ui| {
+                    const background_height = 300;
+                    const background_width = 400;
+
+                    draw_texture_pro(item_slot_texture, window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.WHITE, false);
+    
+                    if(self.forground_tiles[crusher_ui.tile_index].tile != .crusher) {
+                        self.close_inventory();
+                        break :game_ui_drawing;
+                    }
+    
+                    const crusher = &self.get_tile_data(crusher_ui.tile_index).data.crusher;
+
+                    crusher_ui.input_slot.draw(&crusher.input, raylib.BLUE, self.scratch_space.allocator());
+                    crusher_ui.output_slot.draw(&crusher.output, raylib.RED, self.scratch_space.allocator());
+                },
             }
 
             // draw player inventory
@@ -2111,7 +2327,7 @@ const Game = struct {
                     else => raylib.WHITE
                 };
 
-                ui_slot.draw(&self.player.inventory[i], color);
+                ui_slot.draw(&self.player.inventory[i], color, self.scratch_space.allocator());
             }
 
             // draw item in hand
@@ -2123,16 +2339,14 @@ const Game = struct {
                 draw_texture(item_texture, icon_x, icon_y, 50, 50);
                 
                 // max size is 99 so 2 bytes is fine here
-                var text_buffer = std.mem.zeroes([2]u8);
-                const string = std.fmt.bufPrint(text_buffer[0..], "{}", .{self.ui_state.in_hand.count}) catch unreachable;
+                const string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "{}", .{self.ui_state.in_hand.count}) catch unreachable;
                 draw_text(string, icon_x, icon_y, 20, raylib.WHITE);
             }
         }
         
         // fps text 
         {
-            var fps_buffer = std.mem.zeroes([32]u8);
-            const fps_string = std.fmt.bufPrint(fps_buffer[0..], "fps: {}", .{raylib.GetFPS()}) catch unreachable;
+            const fps_string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "fps: {}", .{raylib.GetFPS()}) catch unreachable;
             draw_text(fps_string, window_width() - 100, window_height() - 20, 20, raylib.WHITE);
         }
 
@@ -2161,7 +2375,7 @@ const Game = struct {
 
                 // adding the i * padding gives the gap
                 const slot_x: f32 = @floatFromInt((size * i) + (i * padding) + padding);
-                draw_inventory_slot(&self.player.inventory[i], slot_x, slot_y, size, color);
+                draw_inventory_slot(&self.player.inventory[i], slot_x, slot_y, size, color, self.scratch_space.allocator());
 
                 // draw item selected indicator
                 if(i == self.player.selected_item) {
@@ -2226,6 +2440,9 @@ const Game = struct {
             },
             .furnace => {
                 self.ui_state.current_open_panel = UIPanel.furnace_inventory(tile_index);
+            },
+            .crusher => {
+                self.ui_state.current_open_panel = UIPanel.crusher_inventory(tile_index);
             },
             else => unreachable,
         }
@@ -2352,6 +2569,14 @@ const Game = struct {
 
             self.forground_tiles[target_index].tile.tile_update(target_index, target_tile_data, self);
         }
+    }
+
+    fn get_network(self: *Self, network_id: usize) *Network {
+        if(network_id != self.root_network.network_id) {
+            std.debug.panic("tried to get network with id {} and it did not exist\n", .{network_id});
+        }
+
+        return &self.root_network;
     }
 
     fn get_network_node(self: *const Self, tile_index: usize) *NetworkNode {
@@ -2498,16 +2723,14 @@ fn valid_tile_position(position: TilePosition) bool {
     return true;
 }
 
-fn draw_inventory_slot(inventory_slot: *const InventorySlot, x: f32, y: f32, size: f32, tint: raylib.Color) void {
+fn draw_inventory_slot(inventory_slot: *const InventorySlot, x: f32, y: f32, size: f32, tint: raylib.Color, allocator: std.mem.Allocator) void {
     draw_texture_tint(item_slot_texture, x, y, size, size, tint);
 
     if(inventory_slot.item_type) |item| {                     
         const item_texture = item.get_texture();
         draw_texture(item_texture, x, y, size, size);
-        
-        // max size is 99 so 2 bytes is fine here
-        var text_buffer = std.mem.zeroes([2]u8);
-        const string = std.fmt.bufPrint(text_buffer[0..], "{}", .{inventory_slot.count}) catch unreachable;
+
+        const string = std.fmt.allocPrintZ(allocator, "{}", .{inventory_slot.count}) catch unreachable;
         draw_text(string, x, y, 20, raylib.WHITE);
     }
 }
@@ -2602,6 +2825,7 @@ pub fn main() !void {
     pipe_merger_tile_texture =  try load_texture(pipe_merger_image_path);
     pole_tile_texture =         try load_texture(pole_image_path);
     battery_tile_texture =      try load_texture(battery_image_path);
+    crusher_tile_texture =      try load_texture(crusher_image_path);
 
     // item texture setup
     iron_item_texture =         try load_texture(iron_item_image_path);
