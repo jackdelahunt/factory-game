@@ -340,13 +340,27 @@ const Direction = enum(u8){
 const Network = struct {
     const Self = @This();
 
+    var new_network_id: usize = 0;
+
     network_id: usize,
     available_power: usize,
+    nodes: std.ArrayList(usize),
 
-    fn init(network_id: usize) Self {
-        return Self {
-            .network_id = network_id,
+    fn init(allocator: std.mem.Allocator) Self {
+        const self = Self {
+            .network_id = Self.new_network_id,
             .available_power = 0,
+            .nodes = std.ArrayList(usize).init(allocator),
+        };
+
+        Self.new_network_id += 1;
+
+        return self;
+    }
+
+    fn add_node(self: *Self, node: *const NetworkNode) void {
+        self.nodes.append(node.tile_index) catch {
+            std.debug.panic("out of memory when add new node to network\n", .{});
         };
     }
 
@@ -360,17 +374,32 @@ const Network = struct {
 
 const NetworkNode = struct {
     const Self = @This();
+    const max_neighbour_count = 5;
 
     tile_index: usize,
     network_id: usize,
+    neighbour_tile_indices: [max_neighbour_count]?usize,
 
-    fn init(tile_index: usize) Self {
+    fn init(tile_index: usize, network_id: usize) Self {
         return Self {
             .tile_index = tile_index,
-            .network_id = 0
+            .network_id = network_id,
+            .neighbour_tile_indices = [_]?usize{null} ** max_neighbour_count,
         };
     }
+
+    fn add_neighbour(self: *Self, neighbour_tile_index: usize) void {
+        // TODO: make this better but for now it is fine
+        // if there are no space then it does not connect
+        for(&self.neighbour_tile_indices, 0..) |maybe_neighbour, i| {
+           if(maybe_neighbour == null) {
+                self.neighbour_tile_indices[i] = neighbour_tile_index;
+                return;
+           }
+        }
+    }
 };
+
 
 const ForgroundTile = struct {
     tile: Tile, direction: Direction
@@ -1675,8 +1704,8 @@ const Game = struct {
     background_tiles: []Tile,
     forground_tiles: []ForgroundTile,
     tile_data: std.ArrayList(TileData),
+    networks: std.ArrayList(Network),
     network_nodes: std.ArrayList(NetworkNode),
-    root_network: Network,
     world_gen_noise: fastnoise.Noise(f32),
     allocator: std.mem.Allocator,
     scratch_space: std.heap.FixedBufferAllocator,
@@ -1711,8 +1740,8 @@ const Game = struct {
             .background_tiles = background_tiles,
             .forground_tiles = forground_tiles,
             .tile_data = std.ArrayList(TileData).init(allocator),
+            .networks = std.ArrayList(Network).init(allocator),
             .network_nodes = std.ArrayList(NetworkNode).init(allocator),
-            .root_network = Network.init(0),
             .world_gen_noise = fastnoise.Noise(f32) {
                 .seed = 1337,
                 .noise_type = .perlin,
@@ -1799,9 +1828,12 @@ const Game = struct {
     }
 
     fn power_update(self: *Self) void {
-        // reset network power
-        self.root_network.available_power = 0;
+        // reset power for this tick
+        for(self.networks.items) |*network| {
+            network.available_power = 0;
+        }
 
+        // add power to the network for this tick
         for(self.network_nodes.items) |*node| {
             const tile = self.forground_tiles[node.tile_index].tile;
 
@@ -2524,7 +2556,32 @@ const Game = struct {
         }
 
         if(tile.is_network_node()) {
-            const node = NetworkNode.init(tile_index);
+            // if we are adding a new network node this is the order of things
+            // to be done
+            //
+            // 1. create a new network with a single node (the new one)
+            // 2. check any possible connections to that new node
+            // 3. if there are try and join the two networks
+            // 4. repeat 2 until false
+            var network = Network.init(self.allocator);
+            const node = NetworkNode.init(tile_index, network.network_id);
+
+            network.nodes.append(node.tile_index) catch |err| {
+                switch (err) {          
+                    error.OutOfMemory => {
+                        std.debug.panic("out of memory add new network node to network: tile_index: {}, network_id: {}", .{node.tile_index, network.network_id});
+                    }
+                }
+            };
+
+            self.networks.append(network) catch |err| {
+                switch (err) {          
+                    error.OutOfMemory => {
+                        std.debug.panic("out of memory add new network to game: network_id: {}", .{network.network_id});
+                    }
+                }
+            };
+
             self.network_nodes.append(node) catch |err| {
                 switch (err) {          
                     error.OutOfMemory => {
@@ -2532,6 +2589,8 @@ const Game = struct {
                     }
                 }
             };
+
+            self.search_for_network_connections(tile_index);
         }
 
         if(tile.has_tile_data()) {
@@ -2571,14 +2630,101 @@ const Game = struct {
         }
     }
 
-    fn get_network(self: *Self, network_id: usize) *Network {
-        if(network_id != self.root_network.network_id) {
-            std.debug.panic("tried to get network with id {} and it did not exist\n", .{network_id});
-        }
+    fn search_for_network_connections(self: *Self, tile_index: usize) void {
+        const search_radius = 2;
+        const tile_position = get_x_and_y_from_tile_index(tile_index);
 
-        return &self.root_network;
+        for(tile_position.y - search_radius..tile_position.y + search_radius + 1) |y| {
+            for(tile_position.x - search_radius..tile_position.x + search_radius + 1) |x| {
+                const target_position = TilePosition{.x = x, .y = y};
+
+                if(x == tile_position.x and y == tile_position.y) {
+                    continue; // search tile is the same as the source tile
+                }
+
+                if(!valid_tile_position(target_position)) {
+                    continue;
+                }
+
+                const target_tile_index = get_tile_index_from_x_and_y(target_position.x, target_position.y);
+                if(!self.forground_tiles[target_tile_index].tile.is_network_node()) {
+                    continue;
+                }
+
+                const source_node = self.get_network_node(tile_index);
+                const target_node = self.get_network_node(target_tile_index);
+
+                const source_network = self.get_network(source_node.network_id);
+                const target_network = self.get_network(target_node.network_id);
+
+                self.connect_networks_at_nodes(source_network, target_network, source_node, target_node);
+            }
+        }
     }
 
+    fn connect_networks_at_nodes(self: *Self, source_network: *Network, target_network: *Network, source_node: *NetworkNode, target_node: *NetworkNode) void {
+        // 1. connect the nodes together
+        // 2. check the size of each netowrk
+        // 3. the smaller one is eaten by the bigger
+        //      - change network ids in smaller network
+        //      - add the nodes to the bigger network
+
+        if(source_node.network_id == target_network.network_id) {
+            return;
+        }
+        
+        source_node.add_neighbour(target_node.tile_index);
+        target_node.add_neighbour(source_node.tile_index);
+    
+        var bigger_network : *Network = undefined;
+        var smaller_network : *Network = undefined;
+
+        if(source_network.nodes.items.len > target_network.nodes.items.len) {
+            bigger_network = source_network;
+            smaller_network = target_network;
+        } else {
+            bigger_network = target_network;
+            smaller_network = source_network;
+        }
+   
+        for(self.network_nodes.items) |*node| {
+            if(node.network_id == smaller_network.network_id) {
+                node.network_id = bigger_network.network_id;
+            }
+        }
+
+        bigger_network.nodes.appendSlice(smaller_network.nodes.items) catch unreachable;
+
+        for(0..self.networks.items.len) |i| {
+            if(self.networks.items[i].network_id == smaller_network.network_id) {
+                _ = self.networks.swapRemove(i);
+                break;
+            }
+        }
+
+        std.debug.print("{} ate {} :: network count {}\n", .{bigger_network.network_id, smaller_network.network_id, self.networks.items.len});
+
+        std.debug.print("==========\n", .{});
+        for(self.network_nodes.items) |*node| {
+            std.debug.print("node: {}, network: {}\n", .{node.tile_index, node.network_id});
+        }
+        std.debug.print("==========\n", .{});
+    }
+
+    // WARNING: the pointer is fragile it should not be stored
+    // accross frames, use the id to get a new version of it
+    fn get_network(self: *Self, network_id: usize) *Network {
+        for(self.networks.items) |*network| {
+            if(network.network_id == network_id) {
+                return network;
+            }
+        }
+
+        std.debug.panic("tried to get network with ide: {} and failed\n", .{network_id});
+    }
+
+    // WARNING: the pointer is fragile it should not be stored
+    // accross frames, use the id to get a new version of it
     fn get_network_node(self: *const Self, tile_index: usize) *NetworkNode {
         for(self.network_nodes.items) |*node| {
             if(node.tile_index == tile_index) {
@@ -2592,6 +2738,8 @@ const Game = struct {
         std.debug.panic("tried to get network node at index: {} and failed\n", .{tile_index});
     }
 
+    // WARNING: the pointer is fragile it should not be stored
+    // accross frames, use the index to get a new version of it
     fn get_tile_data(self: *const Self, tile_index: usize) *TileData {
         for(self.tile_data.items) |*tile_data| {
             if(tile_data.tile_index == tile_index) {
