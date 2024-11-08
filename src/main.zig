@@ -2708,7 +2708,12 @@ const Game = struct {
     fn rebuild_damaged_network(self: *Self, network_id: usize) void {
         while(!self.traverse_nodes_and_replace_network(network_id)) {}
 
-        // delete old network
+        for(self.networks.items, 0..) |*network, i| {
+            if(network.network_id == network_id) {
+                _ = self.networks.swapRemove(i);
+                break;
+            }
+        }
     }
 
     fn traverse_nodes_and_replace_network(self: *Self, old_network_id: usize) bool {
