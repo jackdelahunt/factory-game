@@ -24,6 +24,8 @@ const tile_height: i64 = 16;
 const world_tile_width = 150;
 const world_tile_height = 150;
 
+var time_per_tick: f32 = 0.1;
+
 const max_item_stack = 99;
 
 const player_inventory_width = 9;
@@ -502,7 +504,7 @@ const Tile = enum(u8) {
     const miner_max_progress    = 10 * 3;
     const furnace_max_progress  = 10 * 3;
     const crusher_max_progress  = 10 * 2;
-    const pipe_max_progress     = 30 * 1;
+    const pipe_max_progress     = 10 * 0.5;
 
     const pipe_to_slot_count_cutoff = 5;
 
@@ -552,14 +554,21 @@ const Tile = enum(u8) {
 
     fn extractor_can_take(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .pipe => true,
+            .miner, .furnace, .pipe => true,
+            else => false,
+        };
+    }
+
+    fn extractor_can_give(self: *const Self) bool {
+        return switch (self.*) {
+            .miner, .furnace, .pipe => true,
             else => false,
         };
     }
 
     fn pipe_can_give(self: *const Self) bool {
         return switch (self.*) {
-            .furnace, .pipe, .pipe_merger => true,
+            .pipe, .pipe_merger => true,
             else => false,
         };
     }
@@ -844,8 +853,113 @@ const Tile = enum(u8) {
                     }
                 }
             },
-            .pipe, .pipe_merger => {
+            .pipe, => {
                 const pipe = &tile_data.?.data.pipe;
+
+                { // add progress to each non empty slot in the left and right storage
+                    std.debug.assert(pipe.left_storage.len == pipe.right_storage.len);
+
+                    for(0..pipe.left_storage.len) |slot_number| {
+                        const left_slot = &pipe.left_storage[slot_number];
+                        if(left_slot.item != null and left_slot.progress < pipe_max_progress) {
+                            left_slot.progress += 1;
+                        }
+
+                        const right_slot = &pipe.right_storage[slot_number];
+                        if(right_slot.item != null and right_slot.progress < pipe_max_progress) {
+                            right_slot.progress += 1;
+                        }
+                    }
+                }
+
+                // check to output items
+                check_output: {
+                    const current_position = get_tile_position_from_tile_index(tile_index);
+                    const output_direction = game.forground_tiles[tile_index].direction.relative(pipe.relative_output_direction);
+                    const output_position = current_position.get_adjacent_tile_at_direction(output_direction);
+                    if(!output_position.is_valid()) {
+                        break :check_output;
+                    }
+
+                    const output_index = output_position.get_tile_index();
+                    const output_tile = game.forground_tiles[output_index].tile;
+                    
+                    if(!output_tile.pipe_can_give()) {
+                        break :check_output;
+                    }
+
+                    var output_tile_data: ?*TileData = null;  
+                    if(output_tile.has_tile_data()) {
+                        output_tile_data = game.get_tile_data(output_index);
+                    }
+
+                    // try and give from left and right storage last slot
+                    const last_left_slot = pipe.last_left_slot();
+                    if(last_left_slot.item) |item| {
+
+                        if(last_left_slot.progress >= Tile.pipe_max_progress) {
+                            if(output_tile.pipe_give(item, tile_index, true, output_index, output_tile_data, game)) {
+                                pipe.clear_last_left_slot(); 
+                            }
+                        }
+                    }
+
+                    const last_right_slot = pipe.last_right_slot();
+                    if(last_right_slot.item) |item| {
+
+                        if(last_right_slot.progress >= Tile.pipe_max_progress) {
+                            if(output_tile.pipe_give(item, tile_index, false, output_index, output_tile_data, game)) {
+                                pipe.clear_last_right_slot(); 
+                            }
+                        }
+                    }
+                }
+
+                // move each item in the storage up by one if there is space
+                {
+                    std.debug.assert(pipe.left_storage.len == pipe.right_storage.len);
+
+                    // go through each slot, if the next
+                    // slot is empty then move it up by one if max progress
+                    for(0..pipe.left_storage.len - 1) |slot_number| {
+                        const left_slot = &pipe.left_storage[slot_number];
+                        if(left_slot.is_complete()) {
+                            if(pipe.left_storage[slot_number + 1].is_empty()) {
+                                pipe.left_storage[slot_number + 1].item = left_slot.item;
+                                pipe.left_storage[slot_number + 1].progress = 0;
+
+                                left_slot.clear();
+                            }
+                        }
+
+                        const right_slot = &pipe.right_storage[slot_number];
+                        if(right_slot.is_complete()) {
+                            if(pipe.right_storage[slot_number + 1].is_empty()) {
+                                pipe.right_storage[slot_number + 1].item = right_slot.item;
+                                pipe.right_storage[slot_number + 1].progress = 0;
+
+                                right_slot.clear();
+                            }
+                        }
+                    }
+                }
+
+                if(false) {
+                    std.debug.print("=== PIPE DUMP ===\n", .{});
+
+                    std.debug.print("=== RIGHT ===\n", .{});
+                    for(&pipe.left_storage, 0..) |*slot, i| {
+                        std.debug.print("{}: {}\n", .{slot.*, i});
+                    }
+
+                    std.debug.print("=== LEFT ===\n", .{});
+                    for(&pipe.right_storage, 0..) |*slot, i| {
+                        std.debug.print("{}: {}\n", .{slot.*, i});
+                    }
+                }
+            },
+            .pipe_merger => {
+                const pipe = &tile_data.?.data.pipe_merger;
 
                 { // progress items in the pipe
                     for(&pipe.storage) |*slot| {
@@ -878,7 +992,7 @@ const Tile = enum(u8) {
 
                     for(&pipe.storage) |*slot| {
                         if(slot.progress >= Tile.pipe_max_progress) {
-                            if(output_tile.pipe_give(slot.item.?, tile_index, output_index, output_tile_data, game)) {
+                            if(output_tile.pipe_give(slot.item.?, tile_index, false, output_index, output_tile_data, game)) {
                                 slot.item = null;
                                 slot.progress = 0;
                             }        
@@ -938,7 +1052,7 @@ const Tile = enum(u8) {
                     const output_index = output_position.get_tile_index();
                     const output_tile = game.forground_tiles[output_index].tile;
                     
-                    if(!output_tile.pipe_can_give()) {
+                    if(!output_tile.extractor_can_give()) {
                         break :check_output;
                     }
 
@@ -947,7 +1061,7 @@ const Tile = enum(u8) {
                         output_tile_data = game.get_tile_data(output_index);
                     }
 
-                    if(output_tile.pipe_give(extractor.item.?, tile_index, output_index, output_tile_data, game)) {
+                    if(output_tile.extractor_give(extractor.item.?, tile_index, false, output_index, output_tile_data, game)) {
                         extractor.item = null;
                     }
                 }
@@ -1010,14 +1124,16 @@ const Tile = enum(u8) {
                 const pipe = &tile_data.?.data.pipe;
 
                 var item: ?Item = null;
-                
-                for(&pipe.storage) |*slot| {
-                    if(slot.item != null) {
-                        item = slot.item;
-                        slot.progress = 0;
-                        slot.item = null;
-                        return item;
-                    }
+
+                const last_left_slot = pipe.last_left_slot();
+                const last_right_slot = pipe.last_right_slot();
+
+                if(last_left_slot.is_complete()) {
+                    item = last_left_slot.item;
+                    last_left_slot.clear();
+                } else if(last_right_slot.is_complete()) {
+                    item = last_right_slot.item;
+                    last_right_slot.clear();
                 }
 
                 return item;
@@ -1028,32 +1144,22 @@ const Tile = enum(u8) {
         }
     }
 
-    fn pipe_give(self: Self, item: Item, from_index: usize, tile_index: usize, tile_data: ?*TileData, game: *const Game) bool {
+    fn extractor_give(self: Self, item: Item, from_index: usize, is_left_side: bool, tile_index: usize, tile_data: ?*TileData, game: *const Game) bool {
         switch (self) {
-            .furnace => {
-                const furnace = &tile_data.?.data.furnace;
-                
-                var target_slot: *InventorySlot = undefined;
-                if(item.can_be_fuel()) {
-                    target_slot = &furnace.fuel_input;
-                } else if(item.can_be_smelted()) {
-                    target_slot = &furnace.ingredient_input;
-                } else {
-                    return false;
-                }
-                
-                if(target_slot.is_full() or target_slot.count >= Tile.pipe_to_slot_count_cutoff) {
+            .miner => {
+                const miner = &tile_data.?.data.miner;
+
+                if(!item.can_be_fuel() or miner.input.is_full()) {
                     return false;
                 }
 
-                if(target_slot.item_type != null and target_slot.item_type != item) {
-                    return false;
+                if(miner.input.item_type == null or miner.input.item_type.? == item) {
+                    miner.input.count += 1;
+                    miner.input.item_type = item;
+                    return true;
                 }
 
-                // set the item as it should be the same or null
-                target_slot.item_type = item;
-                target_slot.count += 1;
-                return true;
+                return false;
             },
             .pipe => {
                 const pipe = &tile_data.?.data.pipe;
@@ -1066,9 +1172,47 @@ const Tile = enum(u8) {
                 // that is trying to give us input is then do not accept
                 if(input_position.x != from_position.x or input_position.y != from_position.y) return false;
 
-                for(&pipe.storage) |*slot| {
-                    if(slot.item == null) {
-                        slot.item = item;
+                if(is_left_side) {
+                    if(pipe.left_storage[0].item == null) {
+                        pipe.left_storage[0].item = item;
+                        return true;
+                    }
+                } else {
+                    if(pipe.right_storage[0].item == null) {
+                        pipe.right_storage[0].item = item;
+                        return true;
+                    }
+                }
+
+                return false;
+            },
+            else => {
+                unreachable;
+            }
+        }
+    }
+
+    fn pipe_give(self: Self, item: Item, from_index: usize, is_left_side: bool, tile_index: usize, tile_data: ?*TileData, game: *const Game) bool {
+        switch (self) {
+            .pipe => {
+                const pipe = &tile_data.?.data.pipe;
+
+                const current_position = get_tile_position_from_tile_index(tile_index);
+                const from_position = get_tile_position_from_tile_index(from_index);
+                const input_position = current_position.get_adjacent_tile_at_direction(game.forground_tiles[tile_index].direction);
+
+                // if the position that our input is facing is not the same as where the pipe
+                // that is trying to give us input is then do not accept
+                if(input_position.x != from_position.x or input_position.y != from_position.y) return false;
+
+                if(is_left_side) {
+                    if(pipe.left_storage[0].is_empty()) {
+                        pipe.left_storage[0].item = item;
+                        return true;
+                    }
+                } else {
+                    if(pipe.right_storage[0].is_empty()) {
+                        pipe.right_storage[0].item = item;
                         return true;
                     }
                 }
@@ -1076,7 +1220,7 @@ const Tile = enum(u8) {
                 return false;
             },
             .pipe_merger => {
-                const pipe = &tile_data.?.data.pipe;
+                const pipe = &tile_data.?.data.pipe_merger;
 
                 const current_position = get_tile_position_from_tile_index(tile_index);
                 const current_direction = game.forground_tiles[tile_index].direction;
@@ -1157,10 +1301,20 @@ const Tile = enum(u8) {
                     }
                 },
             },
-            .pipe, .pipe_merger => TileData{
+            .pipe => TileData{
                 .tile_index = 0,
                 .data = .{
                     .pipe = .{
+                        .right_storage = std.mem.zeroes([5]PipeStorageSlot),
+                        .left_storage =  std.mem.zeroes([5]PipeStorageSlot),
+                        .relative_output_direction = .up,
+                    },
+                },
+            },
+            .pipe_merger => TileData{
+                .tile_index = 0,
+                .data = .{
+                    .pipe_merger = .{
                         .storage = std.mem.zeroes([5]PipeStorageSlot),
                         .relative_output_direction = .up,
                     },
@@ -1220,7 +1374,7 @@ const TileData = struct {
             progress: i64,          // amount of ticks used for current item   
             fuel_buffer: i64,       // amount of ticks remaining until fuel is over
         },
-        pipe: struct{
+        pipe_merger: struct{
             storage: [5]PipeStorageSlot,
             relative_output_direction: Direction,
 
@@ -1232,6 +1386,30 @@ const TileData = struct {
                 }
 
                 return null;
+            }
+        },
+        pipe: struct{
+            left_storage: [5]PipeStorageSlot,
+            right_storage: [5]PipeStorageSlot,
+            relative_output_direction: Direction,
+
+            fn last_left_slot(self: *@This()) *PipeStorageSlot {
+                return &self.left_storage[self.left_storage.len - 1];
+            }
+
+            fn last_right_slot(self: *@This()) *PipeStorageSlot {
+                return &self.right_storage[self.right_storage.len - 1];
+            }
+
+            fn clear_last_left_slot(self: *@This()) void {
+                self.left_storage[self.left_storage.len - 1].item = null;
+                self.left_storage[self.left_storage.len - 1].progress = 0;
+            }
+
+            fn clear_last_right_slot(self: *@This()) void {
+                self.right_storage[self.right_storage.len - 1].item = null;
+                self.right_storage[self.right_storage.len - 1].progress = 0;
+
             }
         },
         extractor: struct {
@@ -1437,8 +1615,23 @@ const InventorySlot = struct {
 };
 
 const PipeStorageSlot = struct {
+    const Self = @This();
+
     item: ?Item,
-    progress: i64
+    progress: i64,
+
+    fn clear(self: *Self) void {
+        self.item = null;
+        self.progress = 0;
+    }
+
+    fn is_empty(self: *Self) bool {
+        return self.item == null;
+    }
+
+    fn is_complete(self: *Self) bool {
+        return self.progress >= Tile.pipe_max_progress;
+    }
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -1804,6 +1997,8 @@ const Game = struct {
         m: bool,
         up_arrow: bool,
         down_arrow: bool,
+        left_arrow: bool,
+        right_arrow: bool,
         numbers: [9]bool, // we ignore 0
         scroll: f32,
         left_mouse: bool,
@@ -1923,6 +2118,9 @@ const Game = struct {
         raylib.CloseWindow();
     }
 
+    /////////////////////////////////////////////////////////////////////////////////
+    ///                         @input
+    /////////////////////////////////////////////////////////////////////////////////
     fn get_input(self: *Self) void {
         self.input.w = raylib.IsKeyDown(raylib.KEY_W);
         self.input.a = raylib.IsKeyDown(raylib.KEY_A);
@@ -1933,6 +2131,8 @@ const Game = struct {
         self.input.m = raylib.IsKeyPressed(raylib.KEY_M);
         self.input.up_arrow = raylib.IsKeyPressed(raylib.KEY_UP);
         self.input.down_arrow = raylib.IsKeyPressed(raylib.KEY_DOWN);
+        self.input.left_arrow = raylib.IsKeyPressed(raylib.KEY_LEFT);
+        self.input.right_arrow = raylib.IsKeyPressed(raylib.KEY_RIGHT);
         self.input.numbers[0] = raylib.IsKeyDown(raylib.KEY_ONE);
         self.input.numbers[1] = raylib.IsKeyDown(raylib.KEY_TWO);
         self.input.numbers[2] = raylib.IsKeyDown(raylib.KEY_THREE);
@@ -1975,12 +2175,35 @@ const Game = struct {
         }
     }
 
+    /////////////////////////////////////////////////////////////////////////////////
+    ///                         @update
+    /////////////////////////////////////////////////////////////////////////////////
     fn update(self: *Self, delta_time: f32) void {
         self.tick_timer += delta_time;
-        if(self.tick_timer >= 0.1) {
+        if(self.tick_timer >= time_per_tick) {
             self.tick_timer = 0;
             self.power_update();
             self.tick_update();
+        }
+
+        // tick rate update
+        {
+            // also min tick speed
+            const tick_increment = 0.01;
+
+            if(self.input.left_arrow) {
+                time_per_tick -= tick_increment;
+                std.debug.print("tick speed {d}\n", .{time_per_tick});
+            }
+
+            if(self.input.right_arrow) {
+                time_per_tick += tick_increment;
+                std.debug.print("tick speed {d}\n", .{time_per_tick});
+            }
+
+            if(time_per_tick < tick_increment) {
+                time_per_tick = tick_increment;
+            }
         }
 
         // memory debug toggle
@@ -2267,6 +2490,9 @@ const Game = struct {
         }
     }
 
+    /////////////////////////////////////////////////////////////////////////////////
+    ///                         @draw
+    /////////////////////////////////////////////////////////////////////////////////
     fn draw(self: *Self) void {
         raylib.BeginDrawing();
         raylib.ClearBackground(raylib.PURPLE);
@@ -2301,10 +2527,12 @@ const Game = struct {
                 rotated_position = move_draw_location_on_direction(world_position, forground_tile.direction);
             }
 
+            draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
+
             special_pipe_render: {
                 if(forground_tile.tile == .pipe) {
-                    const icon_size = 12;
-    
+                    const icon_size = 8;
+
                     const pipe = &self.get_tile_data(i).data.pipe;
     
                     // only drawing items for straight pipes
@@ -2321,12 +2549,12 @@ const Game = struct {
                         .right => .{.x = world_position.x + tile_width, .y = world_position.y + (tile_height / 2)},
                     };
 
-                    for(&pipe.storage) |*slot| {
+                    for(&pipe.right_storage, 0..) |*slot, slot_index| {
                         if(slot.item == null) {
                             continue;
                         }
-    
-                        const offset_based_on_progress = (@as(f32, @floatFromInt(slot.progress)) / @as(f32, @floatFromInt(Tile.pipe_max_progress))) * tile_width;
+
+                        const offset_based_on_progress = (@as(f32, @floatFromInt(slot_index)) / @as(f32, @floatFromInt(pipe.left_storage.len))) * tile_width;
     
                         const draw_position = switch (forground_tile.direction) {
                             .up => .{.x = icon_start_position.x, .y = icon_start_position.y + offset_based_on_progress},
@@ -2334,14 +2562,12 @@ const Game = struct {
                             .left => .{.x = icon_start_position.x + offset_based_on_progress, .y = icon_start_position.y},
                             .right => .{.x = icon_start_position.x - offset_based_on_progress, .y = icon_start_position.y},
                         };
-    
+
                         const item_texture = slot.item.?.get_texture();
                         draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
                     }
                 }
             }
-
-            draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
 
             if(debug_networks) {
                 if(forground_tile.tile.is_network_node()) {
@@ -2952,14 +3178,6 @@ const Game = struct {
                 break;
             }
         }
-
-        std.debug.print("{} ate {} :: network count {}\n", .{bigger_network.network_id, smaller_network.network_id, self.networks.items.len});
-
-        std.debug.print("==========\n", .{});
-        for(self.network_nodes.items) |*node| {
-            std.debug.print("node: {}, network: {}\n", .{node.tile_index, node.network_id});
-        }
-        std.debug.print("==========\n", .{});
     }
 
     // WARNING: the pointer is fragile it should not be stored
