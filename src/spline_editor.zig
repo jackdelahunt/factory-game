@@ -277,7 +277,7 @@ fn export_spline(spline: *const Spline) !void {
     const file_name = get_text_input();
 
     var buffer: [1024]u8 = .{0} ** 1024;
-    const export_path = try std.fmt.bufPrintZ(buffer[0..], "./src/splines/{s}", .{file_name});
+    const export_path = try std.fmt.bufPrintZ(buffer[0..], "./resources/splines/{s}", .{file_name});
 
     const file = try cwd.createFile(export_path, .{});
     defer file.close();
@@ -294,7 +294,7 @@ fn import_spline() !Spline {
     const file_name = get_text_input();
 
     var buffer: [1024]u8 = .{0} ** 1024;
-    const import_path = try std.fmt.bufPrintZ(buffer[0..], "./src/splines/{s}", .{file_name});
+    const import_path = try std.fmt.bufPrintZ(buffer[0..], "./resources/splines/{s}", .{file_name});
 
     const file = try cwd.openFile(import_path, .{});
     defer file.close();

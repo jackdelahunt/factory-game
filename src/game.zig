@@ -41,9 +41,9 @@ var splines: [24]Spline = undefined;
 
 // spline paths
 //
-const straight_belt_left_spline_path = "splines/straight_belt_left.spline";
-const curved_belt_left_spline_path = "splines/curved_belt_left.spline";
-const curved_belt_right_spline_path = "splines/curved_belt_right.spline";
+const straight_belt_left_spline_path = "straight_belt_left.spline";
+const curved_belt_left_spline_path = "curved_belt_left.spline";
+const curved_belt_right_spline_path = "curved_belt_right.spline";
 
 // gloabal textures
 //
@@ -51,7 +51,7 @@ const curved_belt_right_spline_path = "splines/curved_belt_right.spline";
 var tile_textures: [16]raylib.Texture = .{undefined} ** 16;
 
 // ITEMS
-var item_textures: [6]raylib.Texture = .{undefined} ** 6;
+var item_textures: [5]raylib.Texture = .{undefined} ** 5;
 
 // ALTS
 var alt_textures: [1]raylib.Texture = .{undefined} ** 1;
@@ -467,6 +467,16 @@ const TilePosition = struct {
         return position;
     }
 
+    fn get_direction_from_adjacent_tile(self: *const Self, other: *const TilePosition) ?Direction {
+        if(self.x == other.x and self.y + 1 == other.y) return .down;
+        if(self.x == other.x and self.y - 1 == other.y) return .up;
+
+        if(self.x - 1 == other.x and self.y == other.y) return .left;
+        if(self.x + 1 == other.x and self.y == other.y) return .right;
+
+        return null;
+    }
+
     fn get_tile_index(self: *const Self) usize {
         return @as(usize, @intCast((self.y * world_tile_width) + self.x));
     }
@@ -557,6 +567,21 @@ const Direction = enum(u8){
         };
     }
 
+    fn get_relative_between_directions(self: Self, other: Direction) Direction {
+        if(self == other) return .down;
+        if(self.oppisite() == other) return .up;
+        if(self.clockwise() == other) return .left;
+        if(self.counter_clockwise() == other) return .right;
+
+        unreachable;
+    }
+
+    // get direction relative to the current dierction
+    //                up (relative right)
+    //                         |
+    //  left (relative up)   - O -   <--- *current* right (relative down)
+    //                         |
+    //                  down (relative left)
     fn relative(self: Self, relative_direction: Direction) Direction {
         return switch (relative_direction) {
             .up => self.oppisite(),
@@ -1195,7 +1220,6 @@ const Tile = enum(u8) {
                     extractor.item = input_item;
                 }
 
-                // check to output item
                 check_output: {
                     if(extractor.item == null) {
                         break :check_output;
@@ -1213,14 +1237,8 @@ const Tile = enum(u8) {
                         break :check_output;
                     }
 
-                    var output_tile_data: ?*TileData = null;  
-                    if(output_tile.has_tile_data()) {
-                        output_tile_data = game.get_tile_data(output_index);
-                    }
-
-                    if(output_tile.extractor_give(extractor.item.?, tile_index, Game.extractor_give_left, output_index, output_tile_data, game)) {
+                    if(output_tile.extractor_give(extractor.item.?, tile_index, output_index, game)) {
                         extractor.item = null;
-                        Game.extractor_give_left = !Game.extractor_give_left;
                     }
                 }
             },
@@ -1302,10 +1320,10 @@ const Tile = enum(u8) {
         }
     }
 
-    fn extractor_give(self: Self, item: Item, from_index: usize, is_left_side: bool, tile_index: usize, tile_data: ?*TileData, game: *const Game) bool {
+    fn extractor_give(self: Self, item: Item, from_index: usize, tile_index: usize, game: *const Game) bool {
         switch (self) {
             .miner => {
-                const miner = &tile_data.?.data.miner;
+                const miner = &game.get_tile_data(tile_index).data.miner;
 
                 if(!item.can_be_fuel() or miner.input.is_full()) {
                     return false;
@@ -1319,29 +1337,47 @@ const Tile = enum(u8) {
 
                 return false;
             },
-            .belt => {
-                const belt = &tile_data.?.data.belt;
+            .furnace => {
+                const furnace = &game.get_tile_data(tile_index).data.furnace;
 
-                const current_position = get_tile_position_from_tile_index(tile_index);
-                const from_position = get_tile_position_from_tile_index(from_index);
-                const input_position = current_position.get_adjacent_tile_at_direction(game.forground_tiles[tile_index].direction);
-
-                // if the position that our input is facing is not the same as where the belt
-                // that is trying to give us input is then do not accept
-                if(input_position.x != from_position.x or input_position.y != from_position.y) return false;
-
-                if(is_left_side) {
-                    if(belt.left_storage[0].item == null) {
-                        belt.left_storage[0].item = item;
-                        return true;
-                    }
-                } else {
-                    if(belt.right_storage[0].item == null) {
-                        belt.right_storage[0].item = item;
+                if(item.can_be_fuel()) {
+                    if(!furnace.fuel_input.is_full() and furnace.fuel_input.is_compatible(item)) {
+                        furnace.fuel_input.count += 1;
+                        furnace.fuel_input.item_type = item;
                         return true;
                     }
                 }
 
+                if(item.can_be_smelted()) {
+                    if(!furnace.ingredient_input.is_full() and furnace.ingredient_input.is_compatible(item)) {
+                        furnace.ingredient_input.count += 1;
+                        furnace.ingredient_input.item_type = item;
+                        return true;
+                    }
+                }
+
+                return false;
+            },
+            .belt => {
+                const belt = &game.get_tile_data(tile_index).data.belt;
+
+                const current_position = get_tile_position_from_tile_index(tile_index);
+                const from_position = get_tile_position_from_tile_index(from_index);
+                const current_direction = game.forground_tiles[tile_index].direction;
+
+                const from_direction = current_position.get_direction_from_adjacent_tile(&from_position) orelse std.debug.panic("tried to input to a tile when not beside\n", .{});
+                const relative_direction = current_direction.get_relative_between_directions(from_direction);
+
+                const target_storage_slot = switch (relative_direction) {
+                    .up, .right => &belt.right_storage[0],
+                    .down, .left => &belt.left_storage[0],
+                };
+
+                if(target_storage_slot.item == null) {
+                    target_storage_slot.item = item;
+                    return true;
+                }
+                    
                 return false;
             },
             else => {
@@ -1769,6 +1805,10 @@ const InventorySlot = struct {
 
     fn is_full(self: *const Self) bool {
         return self.count == max_item_stack;
+    }
+
+    fn is_compatible(self: *const Self, item: Item) bool {
+        return self.item_type == null or self.item_type.? == item;
     }
 };
 
@@ -2369,7 +2409,7 @@ const Game = struct {
         }
 
         if(self.input.t) {
-            load_textures() catch |err| {
+            load_resources() catch |err| {
                 std.debug.panic("error when reloading textures during runtime: {}\n", .{err});
             };
         }
@@ -3538,7 +3578,7 @@ fn load_texture(relative_texture_path: []const u8) !raylib.Texture {
     const base_path = try cwd_dir.realpath(".", base_path_buffer[0..]);
 
     var texture_path_buffer = std.mem.zeroes([std.fs.MAX_PATH_BYTES]u8);
-    const texture_path = try std.fmt.bufPrint(texture_path_buffer[0..], "{s}/textures/{s}", .{base_path, relative_texture_path});
+    const texture_path = try std.fmt.bufPrint(texture_path_buffer[0..], "{s}/resources/textures/{s}", .{base_path, relative_texture_path});
 
     const texture = raylib.LoadTexture(&texture_path[0]);
     if(texture.id <= 0) {
@@ -3546,6 +3586,21 @@ fn load_texture(relative_texture_path: []const u8) !raylib.Texture {
     }
 
     return texture;
+}
+
+fn load_spline(relative_spline_path: []const u8) !Spline {
+    const cwd = std.fs.cwd();
+
+    var spline_path_buffer = std.mem.zeroes([std.fs.MAX_PATH_BYTES]u8);
+    const spline_path = try std.fmt.bufPrint(spline_path_buffer[0..], "./resources/splines/{s}", .{relative_spline_path});
+
+    const file = try cwd.openFile(spline_path, .{});
+    
+    var spline_buffer: [@sizeOf(Spline)]u8 = undefined;
+    const read_size = try file.readAll(spline_buffer[0..]);
+    std.debug.assert(read_size == spline_buffer.len);
+
+    return std.mem.bytesToValue(Spline, spline_buffer[0..]);
 }
 
 // relative output direction is ignored if it is straight
@@ -3578,11 +3633,59 @@ fn get_belt_spline(is_straight: bool, is_left_side: bool, direction: Direction, 
     return splines[index];
 }
 
-fn init_belt_splines() void {
-    // ^ |
-    const straight_belt_down_left = std.mem.bytesToValue(Spline, @embedFile(straight_belt_left_spline_path));
-    const curved_belt_down_left = std.mem.bytesToValue(Spline, @embedFile(curved_belt_left_spline_path));
-    const curved_belt_down_right = std.mem.bytesToValue(Spline, @embedFile(curved_belt_right_spline_path));
+fn load_resources() !void {
+    const Loaded = struct {
+        var loaded = false;
+    };
+
+    if(Loaded.loaded) {
+        for(&tile_textures) |texture| {
+            raylib.UnloadTexture(texture);
+        }
+
+        for(&item_textures) |texture| {
+            raylib.UnloadTexture(texture);
+        }
+
+        for(&alt_textures) |texture| {
+            raylib.UnloadTexture(texture);
+        }
+    }
+
+    tile_textures = .{
+       try load_texture(grass_tile_image_path),
+       try load_texture(stone_tile_image_path),
+       try load_texture(iron_ore_tile_image_path),
+       try load_texture(miner_tile_image_path),
+       try load_texture(coal_ore_tile_image_path),
+       try load_texture(furnace_tile_image_path),
+       try load_texture(tree_base_image_path),
+       try load_texture(tree_0_image_path),
+       try load_texture(extractor_image_path),
+       try load_texture(belt_image_path),
+       try load_texture(belt_left_image_path),
+       try load_texture(belt_right_image_path),
+       try load_texture(pipe_merger_image_path),
+       try load_texture(pole_image_path),
+       try load_texture(battery_image_path),
+       try load_texture(crusher_image_path),
+    };
+
+    item_textures = .{
+       try load_texture(iron_item_image_path),
+       try load_texture(coal_item_image_path),
+       try load_texture(iron_ingot_item_image_path),
+       try load_texture(stone_item_image_path),
+       try load_texture(wood_item_image_path),
+    };
+
+    alt_textures = .{
+       try load_texture(item_slot_image_path),
+    };
+
+    const straight_belt_down_left = try load_spline(straight_belt_left_spline_path);
+    const curved_belt_down_left = try load_spline(curved_belt_left_spline_path);
+    const curved_belt_down_right = try load_spline(curved_belt_right_spline_path);
 
     // index by -> straight/curved -> direction -> out direction
     splines = .{
@@ -3646,54 +3749,6 @@ fn init_belt_splines() void {
         curved_belt_down_left.mirror_x().rotate_counter_clockwise(),        // V
                                                                             // -
     };
-}
-
-fn load_textures() !void {
-    const Loaded = struct {
-        var loaded = false;
-    };
-
-    if(Loaded.loaded) {
-        for(&tile_textures) |texture| {
-            raylib.UnloadTexture(texture);
-        }
-
-        for(&item_textures) |texture| {
-            raylib.UnloadTexture(texture);
-        }
-    }
-
-    tile_textures = .{
-       try load_texture(grass_tile_image_path),
-       try load_texture(stone_tile_image_path),
-       try load_texture(iron_ore_tile_image_path),
-       try load_texture(miner_tile_image_path),
-       try load_texture(coal_ore_tile_image_path),
-       try load_texture(furnace_tile_image_path),
-       try load_texture(tree_base_image_path),
-       try load_texture(tree_0_image_path),
-       try load_texture(extractor_image_path),
-       try load_texture(belt_image_path),
-       try load_texture(belt_left_image_path),
-       try load_texture(belt_right_image_path),
-       try load_texture(pipe_merger_image_path),
-       try load_texture(pole_image_path),
-       try load_texture(battery_image_path),
-       try load_texture(crusher_image_path),
-    };
-
-    item_textures = .{
-       try load_texture(iron_item_image_path),
-       try load_texture(coal_item_image_path),
-       try load_texture(furnace_tile_image_path),
-       try load_texture(iron_ingot_item_image_path),
-       try load_texture(stone_item_image_path),
-       try load_texture(wood_item_image_path),
-    };
-
-    alt_textures = .{
-       try load_texture(item_slot_image_path),
-    };
 
     Loaded.loaded = true;
 }
@@ -3708,8 +3763,7 @@ pub fn main() !void {
  
     const allocator = game_arena.allocator();
 
-    init_belt_splines();
-    try load_textures();
+    try load_resources();
     
     // tile texture setup
     // item texture setup
