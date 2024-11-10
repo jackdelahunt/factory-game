@@ -13,6 +13,9 @@ const raygui = @cImport(@cInclude("raygui.h"));
 
 const fastnoise = @import("fastnoise.zig");
 
+const spline_editor = @import("spline_editor.zig");
+
+
 const player_speed: f32 = 450;
 
 const default_screen_width = 1400;
@@ -34,6 +37,17 @@ const player_inventory_size = player_inventory_height * player_inventory_width;
 
 const debug_networks = true;
 var debug_memory_usage = false; // toggled with m
+
+//        straight                   curved
+// (2 side * 4 directions) + (2 sides * 4 direction * 2 output sides)
+var splines: [24]spline_editor.Spline = undefined;
+
+// spline paths
+//
+const straight_belt_left_spline_path = "splines/straight_belt_left.spline";
+const curved_belt_left_spline_path = "splines/curved_belt_left.spline";
+const curved_belt_right_spline_path = "splines/curved_belt_right.spline";
+
 
 // images paths
 //
@@ -1061,8 +1075,9 @@ const Tile = enum(u8) {
                         output_tile_data = game.get_tile_data(output_index);
                     }
 
-                    if(output_tile.extractor_give(extractor.item.?, tile_index, false, output_index, output_tile_data, game)) {
+                    if(output_tile.extractor_give(extractor.item.?, tile_index, Game.extractor_give_left, output_index, output_tile_data, game)) {
                         extractor.item = null;
+                        Game.extractor_give_left = !Game.extractor_give_left;
                     }
                 }
             },
@@ -1987,6 +2002,8 @@ const Player = struct {
 const Game = struct {
     const Self = @This();
 
+    var extractor_give_left = true;
+
     const Input = struct{
         w: bool,
         a: bool,
@@ -2034,7 +2051,7 @@ const Game = struct {
             background_tiles[i] = .air;
             forground_tiles[i] = .{.tile = .air, .direction = .down};
         }
-
+ 
         var game = Game{
             .seed = 16,
             .player = Player{
@@ -2535,32 +2552,48 @@ const Game = struct {
 
                     const pipe = &self.get_tile_data(i).data.pipe;
     
-                    // only drawing items for straight pipes
-                    if(pipe.relative_output_direction != .up) {
+                    if(false) {
                         break :special_pipe_render;
-                    }
+                    } 
+
+                    const left_spline_to_use = get_belt_spline(
+                        pipe.relative_output_direction == Direction.up, 
+                        true, 
+                        forground_tile.direction, 
+                        pipe.relative_output_direction
+                    );
+
+                    const right_spline_to_use = get_belt_spline(
+                        pipe.relative_output_direction == Direction.up, 
+                        false, 
+                        forground_tile.direction, 
+                        pipe.relative_output_direction
+                    );
     
-                    // where is the position of the first item, this need to be done because the rotation
-                    // of the belt also needs to be taken into account
-                    const icon_start_position: WorldPosition = switch (forground_tile.direction) {
-                        .up => .{.x = world_position.x + (tile_width / 2), .y = world_position.y},
-                        .down => .{.x = world_position.x + (tile_width / 2), .y = world_position.y + tile_height},
-                        .left => .{.x = world_position.x, .y = world_position.y + (tile_height / 2)},
-                        .right => .{.x = world_position.x + tile_width, .y = world_position.y + (tile_height / 2)},
-                    };
+                    for(&pipe.left_storage, 0..) |*slot, slot_index| {
+                        if(slot.item == null) {
+                            continue;
+                        }
+
+                        const spline_point = left_spline_to_use.buffer[slot_index];
+                        const draw_position = WorldPosition{
+                            .x = world_position.x + (spline_point.x * tile_width),
+                            .y = world_position.y + (spline_point.y * tile_width),
+                        };
+
+                        const item_texture = slot.item.?.get_texture();
+                        draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
+                    }
 
                     for(&pipe.right_storage, 0..) |*slot, slot_index| {
                         if(slot.item == null) {
                             continue;
                         }
 
-                        const offset_based_on_progress = (@as(f32, @floatFromInt(slot_index)) / @as(f32, @floatFromInt(pipe.left_storage.len))) * tile_width;
-    
-                        const draw_position = switch (forground_tile.direction) {
-                            .up => .{.x = icon_start_position.x, .y = icon_start_position.y + offset_based_on_progress},
-                            .down => .{.x = icon_start_position.x, .y = icon_start_position.y - offset_based_on_progress},
-                            .left => .{.x = icon_start_position.x + offset_based_on_progress, .y = icon_start_position.y},
-                            .right => .{.x = icon_start_position.x - offset_based_on_progress, .y = icon_start_position.y},
+                        const spline_point = right_spline_to_use.buffer[slot_index];
+                        const draw_position = WorldPosition{
+                            .x = world_position.x + (spline_point.x * tile_width),
+                            .y = world_position.y + (spline_point.y * tile_width),
                         };
 
                         const item_texture = slot.item.?.get_texture();
@@ -3364,17 +3397,126 @@ fn load_texture(relative_texture_path: []const u8) !raylib.Texture {
     return texture;
 }
 
+// relative output direction is ignored if it is straight
+fn get_belt_spline(is_straight: bool, is_left_side: bool, direction: Direction, relative_output_direction: Direction) spline_editor.Spline {
+    var index: usize = 0;
+
+    if(!is_straight) {
+        index += 8;
+    }
+
+    if(!is_left_side) {
+        index += 1;
+    }
+
+    switch (direction) {
+        .down => {},
+        .up => index += 2,
+        .left => index += 4,
+        .right => index += 6,
+    }
+
+    if(!is_straight) {
+        switch (relative_output_direction) {
+            .left => index += 8,
+            .right => {},
+            else => {}
+        }
+    }
+
+    return splines[index];
+}
+
+fn init_belt_splines() void {
+    // ^ |
+    const straight_belt_down_left = std.mem.bytesToValue(spline_editor.Spline, @embedFile(straight_belt_left_spline_path));
+    const curved_belt_down_left = std.mem.bytesToValue(spline_editor.Spline, @embedFile(curved_belt_left_spline_path));
+    const curved_belt_down_right = std.mem.bytesToValue(spline_editor.Spline, @embedFile(curved_belt_right_spline_path));
+
+    // index by -> straight/curved -> direction -> out direction
+    splines = .{
+        // straight
+        straight_belt_down_left,                                            // ^ |
+        straight_belt_down_left.mirror_x(),                                 // | ^
+
+        straight_belt_down_left.mirror_x().mirror_y(),                      // | V
+        straight_belt_down_left.mirror_y(),                                 // V |
+                                                        
+        straight_belt_down_left.rotate_clockwise(),                         // >
+                                                                            // -
+
+        straight_belt_down_left.mirror_x().rotate_clockwise(),              // -
+                                                                            // >
+
+
+        straight_belt_down_left.rotate_counter_clockwise(),                 // -
+                                                                            // <
+
+        straight_belt_down_left.mirror_x().rotate_counter_clockwise(),      // <
+                                                                            // -
+
+        // curved
+        curved_belt_down_left,                                              // > |
+        curved_belt_down_right,                                             // | >
+
+        curved_belt_down_left.mirror_x().mirror_y(),                        // | <
+        curved_belt_down_right.mirror_x().mirror_y(),                       // < |
+                                                        
+        curved_belt_down_left.rotate_clockwise(),                           // V
+                                                                            // -
+
+        curved_belt_down_right.rotate_clockwise(),                          // -
+                                                                            // V
+
+
+        curved_belt_down_left.rotate_counter_clockwise(),                   // -
+                                                                            // ^
+
+        curved_belt_down_right.rotate_counter_clockwise(),                  // ^
+                                                                            // -
+  
+        // curved but left this time
+        curved_belt_down_right.mirror_x(),                                  // < |
+        curved_belt_down_left.mirror_x(),                                   // | <
+
+        curved_belt_down_right.mirror_y(),                                  // | >
+        curved_belt_down_left.mirror_y(),                                   // > |
+                                                        
+        curved_belt_down_right.mirror_x().rotate_clockwise(),               // ^
+                                                                            // -
+
+        curved_belt_down_left.mirror_x().rotate_clockwise(),                // -
+                                                                            // ^
+
+
+        curved_belt_down_right.mirror_x().rotate_counter_clockwise(),       // -
+                                                                            // V
+
+        curved_belt_down_left.mirror_x().rotate_counter_clockwise(),        // V
+                                                                            // -
+    };
+}
+
 /////////////////////////////////////////////////////////////////////////////////
 ///                         @main
 /////////////////////////////////////////////////////////////////////////////////
 pub fn main() !void {
+    if(true) {
+        try main_game();
+    } else {
+        try spline_editor.run();        
+    }
+}
+
+fn main_game() !void {
+    init_raylib("factory game");
     var game_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer game_arena.deinit();
  
     const allocator = game_arena.allocator();
 
-    init_raylib("factory game");
-
+    init_belt_splines();  
+    
     // tile texture setup
     grass_tile_texture =        try load_texture(grass_tile_image_path);
     stone_tile_texture =        try load_texture(stone_tile_image_path);
@@ -3404,4 +3546,5 @@ pub fn main() !void {
     var game = try Game.init(&game_arena, allocator);
     game.generate_world();
     game.run();
+
 }
