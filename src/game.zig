@@ -13,9 +13,6 @@ const raygui = @cImport(@cInclude("raygui.h"));
 
 const fastnoise = @import("fastnoise.zig");
 
-const spline_editor = @import("spline_editor.zig");
-
-
 const player_speed: f32 = 450;
 
 const default_screen_width = 1400;
@@ -40,7 +37,7 @@ var debug_memory_usage = false; // toggled with m
 
 //        straight                   curved
 // (2 side * 4 directions) + (2 sides * 4 direction * 2 output sides)
-var splines: [24]spline_editor.Spline = undefined;
+var splines: [24]Spline = undefined;
 
 // spline paths
 //
@@ -135,6 +132,122 @@ fn get_item_texture(item: ItemTextures) raylib.Texture {
 fn get_alt_texture(alt: AltTextures) raylib.Texture {
     return alt_textures[@intFromEnum(alt)];
 }
+
+/////////////////////////////////////////////////////////////////////////////////
+///                         @splines
+////////////////////////////////////////////////////////////////////////////////
+pub const SplinePoint = struct {
+    const Self = @This();
+
+    x: f32,
+    y: f32,
+
+    pub fn clamp(self: *Self) void {
+        self.x = std.math.clamp(self.x, 0, 1);
+        self.y = std.math.clamp(self.y, 0, 1);
+    } 
+};
+
+pub const Spline = struct {
+    const Self = @This();
+
+    const max_points = 5;
+
+    length: usize,
+    buffer: [max_points]SplinePoint,
+
+    pub fn init() Self {
+        return Self{
+            .length = 0,
+            .buffer = [_]SplinePoint{.{.x = 0, .y = 0}} ** max_points,
+        };
+    }
+
+    fn mirror_x(self: *const Self) Self {
+        var new_spline = self.*;
+
+        for(0..new_spline.length) |i| {
+            const point = &new_spline.buffer[i];
+            point.x = 1 - point.x;
+            point.clamp();
+        }
+
+        return new_spline;
+    }
+
+    fn mirror_y(self: *const Self) Self {
+        var new_spline = self.*;
+
+        for(0..new_spline.length) |i| {
+            const point = &new_spline.buffer[i];
+            point.y = 1 - point.y;
+            point.clamp();
+        }
+
+        return new_spline;
+    }
+
+    fn rotate_clockwise(self: *const Self) Self {
+        var new_spline = self.*;
+
+        for(0..new_spline.length) |i| {
+            const point = &new_spline.buffer[i];
+
+            // translate the origin to be the centre of the 
+            // square and not the top left
+            // 0 -> -1, 0.5 -> 0, 1 -> 1
+            const translated_x = (point.x * 2) - 1;
+            const translated_y = (point.y * 2) - 1;
+
+            const half_pi = std.math.pi * 0.5;
+
+            const rotated_x = (translated_x * std.math.cos(half_pi)) - (translated_y * std.math.sin(half_pi));
+            const rotated_y = (translated_x * std.math.sin(half_pi)) + (translated_y * std.math.cos(half_pi));
+
+            point.x = (rotated_x + 1) / 2;
+            point.y = (rotated_y + 1) / 2;
+
+            point.clamp();
+        }
+
+        return new_spline;
+    }
+
+    fn rotate_counter_clockwise(self: *const Self) Self {
+        var new_spline = self.*;
+
+        for(0..new_spline.length) |i| {
+            const point = &new_spline.buffer[i];
+
+            // translate the origin to be the centre of the 
+            // square and not the top left
+            // 0 -> -1, 0.5 -> 0, 1 -> 1
+            const translated_x = (point.x * 2) - 1;
+            const translated_y = (point.y * 2) - 1;
+
+            const half_pi = -std.math.pi * 0.5;
+
+            const rotated_x = (translated_x * std.math.cos(half_pi)) - (translated_y * std.math.sin(half_pi));
+            const rotated_y = (translated_x * std.math.sin(half_pi)) + (translated_y * std.math.cos(half_pi));
+
+            point.x = (rotated_x + 1) / 2;
+            point.y = (rotated_y + 1) / 2;
+
+            point.clamp();
+        }
+
+        return new_spline;
+    }
+
+    pub fn add_point(self: *Self) void {
+        if(self.length == self.buffer.len) {
+            return;
+        }
+
+        self.buffer[self.length] = .{.x = 0, .y = 0};
+        self.length += 1;
+    }
+};
 
 const CraftingRecipe = struct {
     const RecipeItem = struct {item: Item, count: usize};
@@ -548,7 +661,7 @@ const Tile = enum(u8) {
     const miner_max_progress    = 10 * 3;
     const furnace_max_progress  = 10 * 3;
     const crusher_max_progress  = 10 * 2;
-    const pipe_max_progress     = 10 * 0.5;
+    const pipe_max_progress     = 3; // tick for each slot in the belt
 
     const pipe_to_slot_count_cutoff = 5;
 
@@ -2096,7 +2209,7 @@ const Game = struct {
                 .target = .{.x = 0, .y = 0}, // gets set to player x and y before first frame rendered
                 .offset = .{.x = window_width() / 2, .y = window_height() / 2},
                 .rotation = 0,
-                .zoom = 2,
+                .zoom = 3.5,
             },
             .input = std.mem.zeroes(Game.Input),
             .background_tiles = background_tiles,
@@ -2586,7 +2699,7 @@ const Game = struct {
 
             special_pipe_render: {
                 if(forground_tile.tile == .pipe) {
-                    const icon_size = 8;
+                    const icon_size = 6;
 
                     const pipe = &self.get_tile_data(i).data.pipe;
     
@@ -3436,7 +3549,7 @@ fn load_texture(relative_texture_path: []const u8) !raylib.Texture {
 }
 
 // relative output direction is ignored if it is straight
-fn get_belt_spline(is_straight: bool, is_left_side: bool, direction: Direction, relative_output_direction: Direction) spline_editor.Spline {
+fn get_belt_spline(is_straight: bool, is_left_side: bool, direction: Direction, relative_output_direction: Direction) Spline {
     var index: usize = 0;
 
     if(!is_straight) {
@@ -3467,9 +3580,9 @@ fn get_belt_spline(is_straight: bool, is_left_side: bool, direction: Direction, 
 
 fn init_belt_splines() void {
     // ^ |
-    const straight_belt_down_left = std.mem.bytesToValue(spline_editor.Spline, @embedFile(straight_belt_left_spline_path));
-    const curved_belt_down_left = std.mem.bytesToValue(spline_editor.Spline, @embedFile(curved_belt_left_spline_path));
-    const curved_belt_down_right = std.mem.bytesToValue(spline_editor.Spline, @embedFile(curved_belt_right_spline_path));
+    const straight_belt_down_left = std.mem.bytesToValue(Spline, @embedFile(straight_belt_left_spline_path));
+    const curved_belt_down_left = std.mem.bytesToValue(Spline, @embedFile(curved_belt_left_spline_path));
+    const curved_belt_down_right = std.mem.bytesToValue(Spline, @embedFile(curved_belt_right_spline_path));
 
     // index by -> straight/curved -> direction -> out direction
     splines = .{
@@ -3589,14 +3702,6 @@ fn load_textures() !void {
 ///                         @main
 /////////////////////////////////////////////////////////////////////////////////
 pub fn main() !void {
-    if(true) {
-        try main_game();
-    } else {
-        try spline_editor.run();        
-    }
-}
-
-fn main_game() !void {
     init_raylib("factory game");
     var game_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer game_arena.deinit();

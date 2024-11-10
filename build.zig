@@ -15,13 +15,89 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable(.{
-        .name = "zigraylib",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
 
+    const run_step = b.step("run", "Run the app");
+    const spline_step = b.step("spline", "Run the spline editor");
+    const test_step = b.step("test", "Run unit tests");
+
+    { // main game executable
+        const exe = b.addExecutable(.{
+            .name = "zigraylib",
+            .root_source_file = b.path("src/game.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+    
+        install_raylib(b, exe, &target);
+     
+        // This declares intent for the executable to be installed into the
+        // standard location when the user invokes the "install" step (the default
+        // step when running `zig build`).
+        b.installArtifact(exe);
+    
+        // This *creates* a Run step in the build graph, to be executed when another
+        // step is evaluated that depends on it. The next line below will establish
+        // such a dependency.
+        const run_cmd = b.addRunArtifact(exe);
+    
+        // By making the run step depend on the install step, it will be run from the
+        // installation directory rather than directly from within the cache directory.
+        // This is not necessary, however, if the application depends on other installed
+        // files, this ensures they will be present and in the expected location.
+        run_cmd.step.dependOn(b.getInstallStep());
+    
+        // This allows the user to pass arguments to the application in the build
+        // command itself, like this: `zig build run -- arg1 arg2 etc`
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+    
+        // This creates a build step. It will be visible in the `zig build --help` menu,
+        // and can be selected like this: `zig build run`
+        // This will evaluate the `run` step rather than the default, which is "install".
+        run_step.dependOn(&run_cmd.step);
+    }
+
+    { // spline editor executable
+        const exe = b.addExecutable(.{
+            .name = "spline_editor",
+            .root_source_file = b.path("src/spline_editor.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+    
+        install_raylib(b, exe, &target);
+     
+        b.installArtifact(exe);
+    
+        const run_cmd = b.addRunArtifact(exe);
+    
+        run_cmd.step.dependOn(b.getInstallStep());
+    
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+    
+        spline_step.dependOn(&run_cmd.step);
+    }
+
+    { // main game unit tests
+        const exe_unit_tests = b.addTest(.{
+            .root_source_file = b.path("src/game.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+    
+        const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+    
+        // Similar to creating the run step earlier, this exposes a `test` step to
+        // the `zig build --help` menu, providing a way for the user to request
+        // running the unit tests.
+        test_step.dependOn(&run_exe_unit_tests.step);
+    }
+}
+
+fn install_raylib(b: *std.Build, exe: *std.Build.Step.Compile, target: *const std.Build.ResolvedTarget) void {
     exe.addCSourceFile(.{
         .file = b.path("libs/raygui/raygui.c"),
     });  
@@ -48,75 +124,7 @@ pub fn build(b: *std.Build) void {
         else => {},
     }
 
-    // switch (target.getOsTag()) {
-        // .macos => {
-            //        // },
-        // .linux => {
-            // exe.addLibraryPath(.{ .path = "/usr/lib" });
-            // exe.addIncludePath(.{ .path = "/usr/include" });
-            // exe.linkSystemLibrary("GL");
-            // exe.linkSystemLibrary("rt");
-            // exe.linkSystemLibrary("dl");
-            // exe.linkSystemLibrary("m");
-            // exe.linkSystemLibrary("X11");
-        // },
-        // .freebsd, .openbsd, .netbsd, .dragonfly => {
-        //     exe.linkSystemLibrary("GL");
-            // exe.linkSystemLibrary("rt");
-            // exe.linkSystemLibrary("dl");
-            // exe.linkSystemLibrary("m");
-            // exe.linkSystemLibrary("X11");
-            // exe.linkSystemLibrary("Xrandr");
-            // exe.linkSystemLibrary("Xinerama");
-            // exe.linkSystemLibrary("Xi");
-            // exe.linkSystemLibrary("Xxf86vm");
-            // exe.linkSystemLibrary("Xcursor");
-//         },
-        // else => {},
-    // }
-
     exe.linkLibC();
 
 
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
-    b.installArtifact(exe);
-
-    // This *creates* a Run step in the build graph, to be executed when another
-    // step is evaluated that depends on it. The next line below will establish
-    // such a dependency.
-    const run_cmd = b.addRunArtifact(exe);
-
-    // By making the run step depend on the install step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
-    // This is not necessary, however, if the application depends on other installed
-    // files, this ensures they will be present and in the expected location.
-    run_cmd.step.dependOn(b.getInstallStep());
-
-    // This allows the user to pass arguments to the application in the build
-    // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
-
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build run`
-    // This will evaluate the `run` step rather than the default, which is "install".
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
-
-    const exe_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_exe_unit_tests.step);
 }

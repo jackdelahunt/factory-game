@@ -1,15 +1,17 @@
 const std = @import("std");
 
+const game = @import("game.zig");
+
 const raylib = @cImport(@cInclude("raylib.h"));
 const raygui = @cImport(@cInclude("raygui.h"));
+
+const Spline = game.Spline;
 
 const screen_width = 1000;
 const screen_height = 800;
 
 const region_size = 300;
 const point_radius = 8;
-
-const import_path = "./src/splines/curved_belt_right.spline";
 
 var camera: raylib.Camera2D = .{
     .target = .{.x = -10, .y = -10},
@@ -21,133 +23,18 @@ var camera: raylib.Camera2D = .{
 var mouse_selected_point: ?usize = null;
 var editor_selected_point: ?usize = null;
 
-pub const Point = struct {
-    const Self = @This();
+var text_input_buffer: [64]u8 = .{0} ** 64;
 
-    x: f32,
-    y: f32,
+fn real_x(spline: *const game.SplinePoint) f32 {
+    return region_size * spline.x; 
+}
 
-    fn clamp(self: *Self) void {
-        self.x = std.math.clamp(self.x, 0, 1);
-        self.y = std.math.clamp(self.y, 0, 1);
-    }
+fn real_y(spline: *const game.SplinePoint) f32 {
+    return region_size * spline.y; 
+}
 
-    fn real_x(self: *const Self) f32 {
-        return region_size * self.x; 
-    }
-
-    fn real_y(self: *const Self) f32 {
-        return region_size * self.y; 
-    }
-};
-
-pub const Spline = struct {
-    const Self = @This();
-
-    const max_points = 5;
-
-    length: usize,
-    buffer: [max_points]Point,
-
-    pub fn init() Self {
-        return Self{
-            .length = 0,
-            .buffer = [_]Point{.{.x = 0, .y = 0}} ** max_points,
-        };
-    }
-
-    pub fn mirror_x(self: *const Self) Self {
-        var new_spline = self.*;
-
-        for(0..new_spline.length) |i| {
-            const point = &new_spline.buffer[i];
-            point.x = 1 - point.x;
-            point.clamp();
-        }
-
-        return new_spline;
-    }
-
-    pub fn mirror_y(self: *const Self) Self {
-        var new_spline = self.*;
-
-        for(0..new_spline.length) |i| {
-            const point = &new_spline.buffer[i];
-            point.y = 1 - point.y;
-            point.clamp();
-        }
-
-        return new_spline;
-    }
-
-    pub fn rotate_clockwise(self: *const Self) Self {
-        var new_spline = self.*;
-
-        for(0..new_spline.length) |i| {
-            const point = &new_spline.buffer[i];
-
-            // translate the origin to be the centre of the 
-            // square and not the top left
-            // 0 -> -1, 0.5 -> 0, 1 -> 1
-            const translated_x = (point.x * 2) - 1;
-            const translated_y = (point.y * 2) - 1;
-
-            const half_pi = std.math.pi * 0.5;
-
-            const rotated_x = (translated_x * std.math.cos(half_pi)) - (translated_y * std.math.sin(half_pi));
-            const rotated_y = (translated_x * std.math.sin(half_pi)) + (translated_y * std.math.cos(half_pi));
-
-            point.x = (rotated_x + 1) / 2;
-            point.y = (rotated_y + 1) / 2;
-
-            point.clamp();
-        }
-
-        return new_spline;
-    }
-
-    pub fn rotate_counter_clockwise(self: *const Self) Self {
-        var new_spline = self.*;
-
-        for(0..new_spline.length) |i| {
-            const point = &new_spline.buffer[i];
-
-            // translate the origin to be the centre of the 
-            // square and not the top left
-            // 0 -> -1, 0.5 -> 0, 1 -> 1
-            const translated_x = (point.x * 2) - 1;
-            const translated_y = (point.y * 2) - 1;
-
-            const half_pi = -std.math.pi * 0.5;
-
-            const rotated_x = (translated_x * std.math.cos(half_pi)) - (translated_y * std.math.sin(half_pi));
-            const rotated_y = (translated_x * std.math.sin(half_pi)) + (translated_y * std.math.cos(half_pi));
-
-            point.x = (rotated_x + 1) / 2;
-            point.y = (rotated_y + 1) / 2;
-
-            point.clamp();
-        }
-
-        return new_spline;
-    }
-
-    fn add_point(self: *Self) void {
-        if(self.length == self.buffer.len) {
-            return;
-        }
-
-        self.buffer[self.length] = .{.x = 0, .y = 0};
-        self.length += 1;
-    }
-};
-
-pub fn run() !void {
+pub fn main() !void {
     var spline = Spline.init(); 
-
-    if(import_path.len != 0) {
-        spline = import_spline();
-    }
 
     raylib.InitWindow(screen_width, screen_height, "spline editor");
     raylib.SetTargetFPS(30);
@@ -179,8 +66,8 @@ fn update(spline: *Spline) void {
         }
 
         for(0..spline.length) |i| {
-            const point_real_x = spline.buffer[i].real_x();
-            const point_real_y = spline.buffer[i].real_y();
+            const point_real_x = real_x(&spline.buffer[i]);
+            const point_real_y = real_y(&spline.buffer[i]);
 
             if(!(mouse_world_position.x >= point_real_x - point_radius and mouse_world_position.x <= point_real_x + point_radius)) {
                 continue;
@@ -228,7 +115,7 @@ fn draw(spline: *Spline, allocator: std.mem.Allocator) void {
         const start_point = spline.buffer[i];
         const end_point = spline.buffer[i + 1];
 
-        draw_line(start_point.real_x(), start_point.real_y(), end_point.real_x(), end_point.real_y(), 1, raylib.BLACK);
+        draw_line(real_x(&start_point), real_y(&start_point), real_x(&end_point), real_y(&end_point), 1, raylib.BLACK);
     }
 
     // draw points
@@ -246,7 +133,8 @@ fn draw(spline: *Spline, allocator: std.mem.Allocator) void {
             color = raylib.BLUE;
         }
 
-        draw_circle(spline.buffer[i].real_x(), spline.buffer[i].real_y(), point_radius, color);
+        const point = &spline.buffer[i];
+        draw_circle(real_x(point), real_y(point), point_radius, color);
     }
 
     raylib.EndMode2D();
@@ -352,38 +240,66 @@ fn draw(spline: *Spline, allocator: std.mem.Allocator) void {
         selected_point.clamp();
     }
 
+    if(raygui.GuiButton(.{.x = screen_width - 350, .y = screen_height - 160, .width = 300, .height = 50}, "import") != 0) {
+        spline.* = import_spline() catch |err| handle: {
+            std.debug.print("error importing spline: {any}\n", .{err});
+            break :handle spline.*;
+        };
+    }
+
+    _ = raygui.GuiTextBox(.{.x = screen_width - 350, .y = screen_height - 110, .width = 300, .height = 50}, text_input_buffer[0..], 64, true);
+
     if(raygui.GuiButton(.{.x = screen_width - 350, .y = screen_height - 60, .width = 300, .height = 50}, "export") != 0) {
-        export_spline(spline);
+        export_spline(spline) catch |err| {
+            std.debug.print("error exporting spline: {any}\n", .{err});
+        };
     }
 
     raylib.EndDrawing();
 }
 
-fn export_spline(spline: *const Spline) void {
-    if(spline.length == 0) {
-        std.debug.print("did not export spline, no points... :[\n", .{});
-        return;
+fn get_text_input() []const u8 {
+    var end_index: usize = 0;
+    for(&text_input_buffer, 0..) |c, i| {
+        end_index = i;
+
+        if(c == 0) {
+            break;
+        }
     }
 
+    return text_input_buffer[0..end_index];
+}
+
+fn export_spline(spline: *const Spline) !void {
     const cwd = std.fs.cwd();
 
-    const file = cwd.createFile("./src/splines/new.spline", .{}) catch unreachable;
+    const file_name = get_text_input();
+
+    var buffer: [1024]u8 = .{0} ** 1024;
+    const export_path = try std.fmt.bufPrintZ(buffer[0..], "./src/splines/{s}", .{file_name});
+
+    const file = try cwd.createFile(export_path, .{});
     defer file.close();
 
     const bytes = std.mem.toBytes(spline.*);
-    file.writeAll(bytes[0..]) catch unreachable;
+    try file.writeAll(bytes[0..]);
     
-    std.debug.print("exported into cwd/src/splines/new.spline\n", .{});
+    std.debug.print("exported into {s}\n", .{export_path});
 }
 
-fn import_spline() Spline {
+fn import_spline() !Spline {
     const cwd = std.fs.cwd();
 
-    const file = cwd.openFile(import_path, .{}) catch unreachable;
-    defer file.close();
+    const file_name = get_text_input();
 
     var buffer: [1024]u8 = .{0} ** 1024;
-    const size = file.readAll(buffer[0..]) catch unreachable;
+    const import_path = try std.fmt.bufPrintZ(buffer[0..], "./src/splines/{s}", .{file_name});
+
+    const file = try cwd.openFile(import_path, .{});
+    defer file.close();
+
+    const size = try file.readAll(buffer[0..]);
 
     const spline = std.mem.bytesToValue(Spline, buffer[0..size]);
     return spline;
