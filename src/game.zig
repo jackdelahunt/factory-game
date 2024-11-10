@@ -72,9 +72,9 @@ const furnace_tile_image_path = "tiles/furnace.png";
 const tree_base_image_path = "tiles/tree_base.png";
 const tree_0_image_path = "tiles/tree_0.png";
 const extractor_image_path = "tiles/extractor.png";
-const pipe_image_path = "tiles/pipe.png";
-const pipe_left_image_path = "tiles/pipe_left.png";
-const pipe_right_image_path = "tiles/pipe_right.png";
+const belt_image_path = "tiles/belt.png";
+const belt_left_image_path = "tiles/belt_left.png";
+const belt_right_image_path = "tiles/belt_right.png";
 const pipe_merger_image_path = "tiles/pipe_merger.png";
 const pole_image_path = "tiles/pole.png";
 const battery_image_path = "tiles/battery.png";
@@ -100,9 +100,9 @@ const TileTextures = enum {
     tree_base,
     tree_0,
     extractor,
-    pipe,
-    pipe_left,
-    pipe_right,
+    belt,
+    belt_left,
+    belt_right,
     pipe_merger,
     pole,
     battery,
@@ -661,9 +661,9 @@ const Tile = enum(u8) {
     const miner_max_progress    = 10 * 3;
     const furnace_max_progress  = 10 * 3;
     const crusher_max_progress  = 10 * 2;
-    const pipe_max_progress     = 3; // tick for each slot in the belt
+    const belt_max_progress     = 3; // tick for each slot in the belt
 
-    const pipe_to_slot_count_cutoff = 5;
+    const extractor_to_slot_count_cutoff = 5;
 
     air,
     grass,
@@ -674,7 +674,7 @@ const Tile = enum(u8) {
     furnace,
     tree_base,
     tree_0,
-    pipe,
+    belt,
     pipe_merger,
     extractor,
     pole,
@@ -711,21 +711,21 @@ const Tile = enum(u8) {
 
     fn extractor_can_take(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .pipe => true,
+            .miner, .furnace, .belt => true,
             else => false,
         };
     }
 
     fn extractor_can_give(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .pipe => true,
+            .miner, .furnace, .belt => true,
             else => false,
         };
     }
 
-    fn pipe_can_give(self: *const Self) bool {
+    fn belt_can_give(self: *const Self) bool {
         return switch (self.*) {
-            .pipe, .pipe_merger => true,
+            .belt, .pipe_merger => true,
             else => false,
         };
     }
@@ -739,7 +739,7 @@ const Tile = enum(u8) {
 
     fn has_direction(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .pipe, .pipe_merger, .extractor => true,
+            .miner, .belt, .pipe_merger, .extractor => true,
             else => false,
         };
     }
@@ -770,7 +770,7 @@ const Tile = enum(u8) {
             .miner => .miner,
             .furnace => .furnace,
             .tree_base, .tree_0 => .wood,
-            .pipe => .pipe,
+            .belt => .belt,
             .extractor => .extractor,
             .pole => .pole,
             .battery => .battery,
@@ -781,12 +781,12 @@ const Tile = enum(u8) {
 
     fn get_texture(self: *const Self, tile_index: usize, game: *const Game) raylib.Texture {
         return switch (self.*) {
-            .pipe => {
-                const pipe = &game.get_tile_data(tile_index).data.pipe;
-                return switch (pipe.relative_output_direction) {
-                    .up => get_tile_texture(.pipe),
-                    .left => get_tile_texture(.pipe_left),
-                    .right => get_tile_texture(.pipe_right),
+            .belt => {
+                const belt = &game.get_tile_data(tile_index).data.belt;
+                return switch (belt.relative_output_direction) {
+                    .up => get_tile_texture(.belt),
+                    .left => get_tile_texture(.belt_left),
+                    .right => get_tile_texture(.belt_right),
                     .down => unreachable
                 };
             },
@@ -805,7 +805,7 @@ const Tile = enum(u8) {
             .furnace => get_tile_texture(.furnace),
             .tree_base => get_tile_texture(.tree_base),
             .tree_0 => get_tile_texture(.tree_0),
-            .pipe => get_tile_texture(.pipe),
+            .belt => get_tile_texture(.belt),
             .pipe_merger => get_tile_texture(.pipe_merger),
             .extractor => get_tile_texture(.extractor),
             .pole => get_tile_texture(.pole),
@@ -816,17 +816,17 @@ const Tile = enum(u8) {
 
     fn has_tile_data(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .pipe, .pipe_merger, .extractor, .crusher => true,
+            .miner, .furnace, .belt, .pipe_merger, .extractor, .crusher => true,
             else => false,
         };
     }
 
     // when a tile is place or updated can it
     // tuen to this tile to give items
-    fn can_pipe_turn_to(self: Self, from_index: usize, tile_index: usize, game: *const Game) bool {
+    fn can_belt_turn_to(self: Self, from_index: usize, tile_index: usize, game: *const Game) bool {
         switch (self) {
             .furnace => return true,
-            .pipe => {
+            .belt => {
                 const current_position = get_tile_position_from_tile_index(tile_index);
                 if(!current_position.is_valid()) {
                     return false;
@@ -915,14 +915,14 @@ const Tile = enum(u8) {
                 var miner = &tile_data.?.data.miner;
                 miner.valid_placement = game.background_tiles[tile_index].can_be_mined();
             },
-            .pipe => {
-                const pipe = &tile_data.?.data.pipe;
+            .belt => {
+                const belt = &tile_data.?.data.belt;
                 
                 const position = get_tile_position_from_tile_index(tile_index);
                 const current_direction = game.forground_tiles[tile_index].direction;
 
                 const targets = [_]struct {position: TilePosition, relative_direction: Direction} {
-                    .{.position = position.get_adjacent_tile_at_direction(current_direction.relative(pipe.relative_output_direction)), .relative_direction = pipe.relative_output_direction},
+                    .{.position = position.get_adjacent_tile_at_direction(current_direction.relative(belt.relative_output_direction)), .relative_direction = belt.relative_output_direction},
                     .{.position = position.get_adjacent_tile_at_direction(current_direction.oppisite()), .relative_direction = .up},
                     .{.position = position.get_adjacent_tile_at_direction(current_direction.clockwise()), .relative_direction = .left},
                     .{.position = position.get_adjacent_tile_at_direction(current_direction.counter_clockwise()), .relative_direction = .right}
@@ -936,8 +936,8 @@ const Tile = enum(u8) {
                     const target_index = target.position.get_tile_index();
                     const target_tile = game.forground_tiles[target_index];
 
-                    if(target_tile.tile.can_pipe_turn_to(tile_index, target_index, game)) {
-                        pipe.relative_output_direction = target.relative_direction;
+                    if(target_tile.tile.can_belt_turn_to(tile_index, target_index, game)) {
+                        belt.relative_output_direction = target.relative_direction;
                         return;
                     }
                 }
@@ -1010,20 +1010,20 @@ const Tile = enum(u8) {
                     }
                 }
             },
-            .pipe, => {
-                const pipe = &tile_data.?.data.pipe;
+            .belt, => {
+                const belt = &tile_data.?.data.belt;
 
                 { // add progress to each non empty slot in the left and right storage
-                    std.debug.assert(pipe.left_storage.len == pipe.right_storage.len);
+                    std.debug.assert(belt.left_storage.len == belt.right_storage.len);
 
-                    for(0..pipe.left_storage.len) |slot_number| {
-                        const left_slot = &pipe.left_storage[slot_number];
-                        if(left_slot.item != null and left_slot.progress < pipe_max_progress) {
+                    for(0..belt.left_storage.len) |slot_number| {
+                        const left_slot = &belt.left_storage[slot_number];
+                        if(left_slot.item != null and left_slot.progress < belt_max_progress) {
                             left_slot.progress += 1;
                         }
 
-                        const right_slot = &pipe.right_storage[slot_number];
-                        if(right_slot.item != null and right_slot.progress < pipe_max_progress) {
+                        const right_slot = &belt.right_storage[slot_number];
+                        if(right_slot.item != null and right_slot.progress < belt_max_progress) {
                             right_slot.progress += 1;
                         }
                     }
@@ -1032,7 +1032,7 @@ const Tile = enum(u8) {
                 // check to output items
                 check_output: {
                     const current_position = get_tile_position_from_tile_index(tile_index);
-                    const output_direction = game.forground_tiles[tile_index].direction.relative(pipe.relative_output_direction);
+                    const output_direction = game.forground_tiles[tile_index].direction.relative(belt.relative_output_direction);
                     const output_position = current_position.get_adjacent_tile_at_direction(output_direction);
                     if(!output_position.is_valid()) {
                         break :check_output;
@@ -1041,7 +1041,7 @@ const Tile = enum(u8) {
                     const output_index = output_position.get_tile_index();
                     const output_tile = game.forground_tiles[output_index].tile;
                     
-                    if(!output_tile.pipe_can_give()) {
+                    if(!output_tile.belt_can_give()) {
                         break :check_output;
                     }
 
@@ -1051,22 +1051,22 @@ const Tile = enum(u8) {
                     }
 
                     // try and give from left and right storage last slot
-                    const last_left_slot = pipe.last_left_slot();
+                    const last_left_slot = belt.last_left_slot();
                     if(last_left_slot.item) |item| {
 
-                        if(last_left_slot.progress >= Tile.pipe_max_progress) {
-                            if(output_tile.pipe_give(item, tile_index, true, output_index, output_tile_data, game)) {
-                                pipe.clear_last_left_slot(); 
+                        if(last_left_slot.progress >= Tile.belt_max_progress) {
+                            if(output_tile.belt_give(item, tile_index, true, output_index, output_tile_data, game)) {
+                                belt.clear_last_left_slot(); 
                             }
                         }
                     }
 
-                    const last_right_slot = pipe.last_right_slot();
+                    const last_right_slot = belt.last_right_slot();
                     if(last_right_slot.item) |item| {
 
-                        if(last_right_slot.progress >= Tile.pipe_max_progress) {
-                            if(output_tile.pipe_give(item, tile_index, false, output_index, output_tile_data, game)) {
-                                pipe.clear_last_right_slot(); 
+                        if(last_right_slot.progress >= Tile.belt_max_progress) {
+                            if(output_tile.belt_give(item, tile_index, false, output_index, output_tile_data, game)) {
+                                belt.clear_last_right_slot(); 
                             }
                         }
                     }
@@ -1074,26 +1074,26 @@ const Tile = enum(u8) {
 
                 // move each item in the storage up by one if there is space
                 {
-                    std.debug.assert(pipe.left_storage.len == pipe.right_storage.len);
+                    std.debug.assert(belt.left_storage.len == belt.right_storage.len);
 
                     // go through each slot, if the next
                     // slot is empty then move it up by one if max progress
-                    for(0..pipe.left_storage.len - 1) |slot_number| {
-                        const left_slot = &pipe.left_storage[slot_number];
+                    for(0..belt.left_storage.len - 1) |slot_number| {
+                        const left_slot = &belt.left_storage[slot_number];
                         if(left_slot.is_complete()) {
-                            if(pipe.left_storage[slot_number + 1].is_empty()) {
-                                pipe.left_storage[slot_number + 1].item = left_slot.item;
-                                pipe.left_storage[slot_number + 1].progress = 0;
+                            if(belt.left_storage[slot_number + 1].is_empty()) {
+                                belt.left_storage[slot_number + 1].item = left_slot.item;
+                                belt.left_storage[slot_number + 1].progress = 0;
 
                                 left_slot.clear();
                             }
                         }
 
-                        const right_slot = &pipe.right_storage[slot_number];
+                        const right_slot = &belt.right_storage[slot_number];
                         if(right_slot.is_complete()) {
-                            if(pipe.right_storage[slot_number + 1].is_empty()) {
-                                pipe.right_storage[slot_number + 1].item = right_slot.item;
-                                pipe.right_storage[slot_number + 1].progress = 0;
+                            if(belt.right_storage[slot_number + 1].is_empty()) {
+                                belt.right_storage[slot_number + 1].item = right_slot.item;
+                                belt.right_storage[slot_number + 1].progress = 0;
 
                                 right_slot.clear();
                             }
@@ -1102,25 +1102,25 @@ const Tile = enum(u8) {
                 }
 
                 if(false) {
-                    std.debug.print("=== PIPE DUMP ===\n", .{});
+                    std.debug.print("=== BELT DUMP ===\n", .{});
 
                     std.debug.print("=== RIGHT ===\n", .{});
-                    for(&pipe.left_storage, 0..) |*slot, i| {
+                    for(&belt.left_storage, 0..) |*slot, i| {
                         std.debug.print("{}: {}\n", .{slot.*, i});
                     }
 
                     std.debug.print("=== LEFT ===\n", .{});
-                    for(&pipe.right_storage, 0..) |*slot, i| {
+                    for(&belt.right_storage, 0..) |*slot, i| {
                         std.debug.print("{}: {}\n", .{slot.*, i});
                     }
                 }
             },
             .pipe_merger => {
-                const pipe = &tile_data.?.data.pipe_merger;
+                const pipe_merger = &tile_data.?.data.pipe_merger;
 
                 { // progress items in the pipe
-                    for(&pipe.storage) |*slot| {
-                        if(slot.item != null and slot.progress < pipe_max_progress) {
+                    for(&pipe_merger.storage) |*slot| {
+                        if(slot.item != null and slot.progress < belt_max_progress) {
                             slot.progress += 1;
                         }
                     }
@@ -1129,7 +1129,7 @@ const Tile = enum(u8) {
                 // check to output items
                 check_output: {
                     const current_position = get_tile_position_from_tile_index(tile_index);
-                    const output_direction = game.forground_tiles[tile_index].direction.relative(pipe.relative_output_direction);
+                    const output_direction = game.forground_tiles[tile_index].direction.relative(pipe_merger.relative_output_direction);
                     const output_position = current_position.get_adjacent_tile_at_direction(output_direction);
                     if(!output_position.is_valid()) {
                         break :check_output;
@@ -1138,7 +1138,7 @@ const Tile = enum(u8) {
                     const output_index = output_position.get_tile_index();
                     const output_tile = game.forground_tiles[output_index].tile;
                     
-                    if(!output_tile.pipe_can_give()) {
+                    if(!output_tile.belt_can_give()) {
                         break :check_output;
                     }
 
@@ -1147,9 +1147,9 @@ const Tile = enum(u8) {
                         output_tile_data = game.get_tile_data(output_index);
                     }
 
-                    for(&pipe.storage) |*slot| {
-                        if(slot.progress >= Tile.pipe_max_progress) {
-                            if(output_tile.pipe_give(slot.item.?, tile_index, false, output_index, output_tile_data, game)) {
+                    for(&pipe_merger.storage) |*slot| {
+                        if(slot.progress >= Tile.belt_max_progress) {
+                            if(output_tile.belt_give(slot.item.?, tile_index, false, output_index, output_tile_data, game)) {
                                 slot.item = null;
                                 slot.progress = 0;
                             }        
@@ -1278,13 +1278,13 @@ const Tile = enum(u8) {
                 _ = miner.output.take_amount(1);
                 return output_item;
             },
-            .pipe => {
-                const pipe = &tile_data.?.data.pipe;
+            .belt => {
+                const belt = &tile_data.?.data.belt;
 
                 var item: ?Item = null;
 
-                const last_left_slot = pipe.last_left_slot();
-                const last_right_slot = pipe.last_right_slot();
+                const last_left_slot = belt.last_left_slot();
+                const last_right_slot = belt.last_right_slot();
 
                 if(last_left_slot.is_complete()) {
                     item = last_left_slot.item;
@@ -1319,25 +1319,25 @@ const Tile = enum(u8) {
 
                 return false;
             },
-            .pipe => {
-                const pipe = &tile_data.?.data.pipe;
+            .belt => {
+                const belt = &tile_data.?.data.belt;
 
                 const current_position = get_tile_position_from_tile_index(tile_index);
                 const from_position = get_tile_position_from_tile_index(from_index);
                 const input_position = current_position.get_adjacent_tile_at_direction(game.forground_tiles[tile_index].direction);
 
-                // if the position that our input is facing is not the same as where the pipe
+                // if the position that our input is facing is not the same as where the belt
                 // that is trying to give us input is then do not accept
                 if(input_position.x != from_position.x or input_position.y != from_position.y) return false;
 
                 if(is_left_side) {
-                    if(pipe.left_storage[0].item == null) {
-                        pipe.left_storage[0].item = item;
+                    if(belt.left_storage[0].item == null) {
+                        belt.left_storage[0].item = item;
                         return true;
                     }
                 } else {
-                    if(pipe.right_storage[0].item == null) {
-                        pipe.right_storage[0].item = item;
+                    if(belt.right_storage[0].item == null) {
+                        belt.right_storage[0].item = item;
                         return true;
                     }
                 }
@@ -1350,27 +1350,27 @@ const Tile = enum(u8) {
         }
     }
 
-    fn pipe_give(self: Self, item: Item, from_index: usize, is_left_side: bool, tile_index: usize, tile_data: ?*TileData, game: *const Game) bool {
+    fn belt_give(self: Self, item: Item, from_index: usize, is_left_side: bool, tile_index: usize, tile_data: ?*TileData, game: *const Game) bool {
         switch (self) {
-            .pipe => {
-                const pipe = &tile_data.?.data.pipe;
+            .belt => {
+                const belt = &tile_data.?.data.belt;
 
                 const current_position = get_tile_position_from_tile_index(tile_index);
                 const from_position = get_tile_position_from_tile_index(from_index);
                 const input_position = current_position.get_adjacent_tile_at_direction(game.forground_tiles[tile_index].direction);
 
-                // if the position that our input is facing is not the same as where the pipe
+                // if the position that our input is facing is not the same as where the belt
                 // that is trying to give us input is then do not accept
                 if(input_position.x != from_position.x or input_position.y != from_position.y) return false;
 
                 if(is_left_side) {
-                    if(pipe.left_storage[0].is_empty()) {
-                        pipe.left_storage[0].item = item;
+                    if(belt.left_storage[0].is_empty()) {
+                        belt.left_storage[0].item = item;
                         return true;
                     }
                 } else {
-                    if(pipe.right_storage[0].is_empty()) {
-                        pipe.right_storage[0].item = item;
+                    if(belt.right_storage[0].is_empty()) {
+                        belt.right_storage[0].item = item;
                         return true;
                     }
                 }
@@ -1378,7 +1378,7 @@ const Tile = enum(u8) {
                 return false;
             },
             .pipe_merger => {
-                const pipe = &tile_data.?.data.pipe_merger;
+                const pipe_merger = &tile_data.?.data.pipe_merger;
 
                 const current_position = get_tile_position_from_tile_index(tile_index);
                 const current_direction = game.forground_tiles[tile_index].direction;
@@ -1400,7 +1400,7 @@ const Tile = enum(u8) {
                     return false;
                 }
 
-                for(&pipe.storage) |*slot| {
+                for(&pipe_merger.storage) |*slot| {
                     if(slot.item == null) {
                         slot.item = item;
                         return true;
@@ -1459,12 +1459,12 @@ const Tile = enum(u8) {
                     }
                 },
             },
-            .pipe => TileData{
+            .belt => TileData{
                 .tile_index = 0,
                 .data = .{
-                    .pipe = .{
-                        .right_storage = std.mem.zeroes([5]PipeStorageSlot),
-                        .left_storage =  std.mem.zeroes([5]PipeStorageSlot),
+                    .belt = .{
+                        .right_storage = std.mem.zeroes([5]BeltStorageSlot),
+                        .left_storage =  std.mem.zeroes([5]BeltStorageSlot),
                         .relative_output_direction = .up,
                     },
                 },
@@ -1473,7 +1473,7 @@ const Tile = enum(u8) {
                 .tile_index = 0,
                 .data = .{
                     .pipe_merger = .{
-                        .storage = std.mem.zeroes([5]PipeStorageSlot),
+                        .storage = std.mem.zeroes([5]BeltStorageSlot),
                         .relative_output_direction = .up,
                     },
                 },
@@ -1533,7 +1533,7 @@ const TileData = struct {
             fuel_buffer: i64,       // amount of ticks remaining until fuel is over
         },
         pipe_merger: struct{
-            storage: [5]PipeStorageSlot,
+            storage: [5]BeltStorageSlot,
             relative_output_direction: Direction,
 
             fn get_empty_slot(self: *const @This()) ?usize {
@@ -1546,16 +1546,16 @@ const TileData = struct {
                 return null;
             }
         },
-        pipe: struct{
-            left_storage: [5]PipeStorageSlot,
-            right_storage: [5]PipeStorageSlot,
+        belt: struct{
+            left_storage: [5]BeltStorageSlot,
+            right_storage: [5]BeltStorageSlot,
             relative_output_direction: Direction,
 
-            fn last_left_slot(self: *@This()) *PipeStorageSlot {
+            fn last_left_slot(self: *@This()) *BeltStorageSlot {
                 return &self.left_storage[self.left_storage.len - 1];
             }
 
-            fn last_right_slot(self: *@This()) *PipeStorageSlot {
+            fn last_right_slot(self: *@This()) *BeltStorageSlot {
                 return &self.right_storage[self.right_storage.len - 1];
             }
 
@@ -1591,7 +1591,7 @@ const Item = enum {
     iron_ingot,
     stone,
     wood,
-    pipe,
+    belt,
     pipe_merger,
     extractor,
     pole,
@@ -1650,7 +1650,7 @@ const Item = enum {
             .iron_ingot => get_item_texture(.iron_ingot),
             .stone => get_tile_texture(.stone),
             .wood => get_item_texture(.wood),
-            .pipe => get_tile_texture(.pipe),
+            .belt => get_tile_texture(.belt),
             .pipe_merger => get_tile_texture(.pipe_merger),
             .extractor => get_tile_texture(.extractor),
             .pole => get_tile_texture(.pole),
@@ -1667,7 +1667,7 @@ const Item = enum {
         return switch (self.*) {
             .miner => .miner,
             .furnace => .furnace,
-            .pipe => .pipe,
+            .belt => .belt,
             .pipe_merger => .pipe_merger,
             .extractor => .extractor,
             .pole => .pole,
@@ -1679,7 +1679,7 @@ const Item = enum {
 
     fn can_be_placed(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .pipe, .pipe_merger, .extractor, .pole, .battery, .crusher => true,
+            .miner, .furnace, .belt, .pipe_merger, .extractor, .pole, .battery, .crusher => true,
             else => false,
         };
     }
@@ -1772,7 +1772,7 @@ const InventorySlot = struct {
     }
 };
 
-const PipeStorageSlot = struct {
+const BeltStorageSlot = struct {
     const Self = @This();
 
     item: ?Item,
@@ -1788,7 +1788,7 @@ const PipeStorageSlot = struct {
     }
 
     fn is_complete(self: *Self) bool {
-        return self.progress >= Tile.pipe_max_progress;
+        return self.progress >= Tile.belt_max_progress;
     }
 };
 
@@ -2240,7 +2240,7 @@ const Game = struct {
         // temp adding items to inventory 
         game.player.inventory[0] = .{ .item_type = .miner, .count = 99 };
         game.player.inventory[1] = .{ .item_type = .extractor, .count = 99 };
-        game.player.inventory[2] = .{ .item_type = .pipe, .count = 99 };
+        game.player.inventory[2] = .{ .item_type = .belt, .count = 99 };
         game.player.inventory[3] = .{ .item_type = .pipe_merger, .count = 99 };
         game.player.inventory[4] = .{ .item_type = .crusher, .count = 99 };
         game.player.inventory[6] = .{ .item_type = .furnace, .count = 99 };
@@ -2697,31 +2697,31 @@ const Game = struct {
 
             draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
 
-            special_pipe_render: {
-                if(forground_tile.tile == .pipe) {
+            special_belt_render: {
+                if(forground_tile.tile == .belt) {
                     const icon_size = 6;
 
-                    const pipe = &self.get_tile_data(i).data.pipe;
+                    const belt = &self.get_tile_data(i).data.belt;
     
                     if(false) {
-                        break :special_pipe_render;
+                        break :special_belt_render;
                     } 
 
                     const left_spline_to_use = get_belt_spline(
-                        pipe.relative_output_direction == Direction.up, 
+                        belt.relative_output_direction == Direction.up, 
                         true, 
                         forground_tile.direction, 
-                        pipe.relative_output_direction
+                        belt.relative_output_direction
                     );
 
                     const right_spline_to_use = get_belt_spline(
-                        pipe.relative_output_direction == Direction.up, 
+                        belt.relative_output_direction == Direction.up, 
                         false, 
                         forground_tile.direction, 
-                        pipe.relative_output_direction
+                        belt.relative_output_direction
                     );
     
-                    for(&pipe.left_storage, 0..) |*slot, slot_index| {
+                    for(&belt.left_storage, 0..) |*slot, slot_index| {
                         if(slot.item == null) {
                             continue;
                         }
@@ -2736,7 +2736,7 @@ const Game = struct {
                         draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
                     }
 
-                    for(&pipe.right_storage, 0..) |*slot, slot_index| {
+                    for(&belt.right_storage, 0..) |*slot, slot_index| {
                         if(slot.item == null) {
                             continue;
                         }
@@ -3673,9 +3673,9 @@ fn load_textures() !void {
        try load_texture(tree_base_image_path),
        try load_texture(tree_0_image_path),
        try load_texture(extractor_image_path),
-       try load_texture(pipe_image_path),
-       try load_texture(pipe_left_image_path),
-       try load_texture(pipe_right_image_path),
+       try load_texture(belt_image_path),
+       try load_texture(belt_left_image_path),
+       try load_texture(belt_right_image_path),
        try load_texture(pipe_merger_image_path),
        try load_texture(pole_image_path),
        try load_texture(battery_image_path),
