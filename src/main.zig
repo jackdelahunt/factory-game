@@ -48,6 +48,20 @@ const straight_belt_left_spline_path = "splines/straight_belt_left.spline";
 const curved_belt_left_spline_path = "splines/curved_belt_left.spline";
 const curved_belt_right_spline_path = "splines/curved_belt_right.spline";
 
+// gloabal textures
+//
+// TILES
+var tile_textures: [16]raylib.Texture = .{undefined} ** 16;
+
+// ITEMS
+var item_textures: [6]raylib.Texture = .{undefined} ** 6;
+
+// ALTS
+var alt_textures: [1]raylib.Texture = .{undefined} ** 1;
+
+/////////////////////////////////////////////////////////////////////////////////
+///                         @textures
+////////////////////////////////////////////////////////////////////////////////
 
 // images paths
 //
@@ -71,40 +85,56 @@ const crusher_image_path = "tiles/crusher.png";
 
 // ITEMS
 const iron_item_image_path = "items/iron.png";
-const item_slot_image_path = "items/item_slot.png";
 const coal_item_image_path = "items/coal.png";
 const iron_ingot_item_image_path = "items/iron_ingot.png";
 const stone_item_image_path = "items/stone.png";
 const wood_item_image_path = "items/wood.png";
 
+// ALTS
+const item_slot_image_path = "items/item_slot.png";
 
-// gloabal textures
-//
-// TILES
-var grass_tile_texture: raylib.Texture = undefined;
-var stone_tile_texture: raylib.Texture = undefined;
-var iron_ore_tile_texture: raylib.Texture = undefined;
-var miner_tile_texture: raylib.Texture = undefined;
-var coal_ore_tile_texture: raylib.Texture = undefined;
-var furnace_tile_texture: raylib.Texture = undefined;
-var tree_base_tile_texture: raylib.Texture = undefined;
-var tree_0_tile_texture: raylib.Texture = undefined;
-var extractor_tile_texture: raylib.Texture = undefined;
-var pipe_tile_texture: raylib.Texture = undefined;
-var pipe_left_tile_texture: raylib.Texture = undefined;
-var pipe_right_tile_texture: raylib.Texture = undefined;
-var pipe_merger_tile_texture: raylib.Texture = undefined;
-var pole_tile_texture: raylib.Texture = undefined;
-var battery_tile_texture: raylib.Texture = undefined;
-var crusher_tile_texture: raylib.Texture = undefined;
+const TileTextures = enum {
+    grass,
+    stone,
+    iron_ore,
+    miner,
+    coal_ore,
+    furnace,
+    tree_base,
+    tree_0,
+    extractor,
+    pipe,
+    pipe_left,
+    pipe_right,
+    pipe_merger,
+    pole,
+    battery,
+    crusher
+};
 
-// ITEMS
-var iron_item_texture: raylib.Texture = undefined;
-var item_slot_texture: raylib.Texture = undefined;
-var coal_item_texture: raylib.Texture = undefined;
-var iron_ingot_item_texture: raylib.Texture = undefined;
-var stone_item_texture: raylib.Texture = undefined;
-var wood_item_texture: raylib.Texture = undefined;
+const ItemTextures = enum {
+    iron,
+    coal,
+    iron_ingot,
+    stone,
+    wood
+};
+
+const AltTextures = enum {
+    item_slot
+};
+
+fn get_tile_texture(tile: TileTextures) raylib.Texture {
+    return tile_textures[@intFromEnum(tile)];
+}
+
+fn get_item_texture(item: ItemTextures) raylib.Texture {
+    return item_textures[@intFromEnum(item)];
+}
+
+fn get_alt_texture(alt: AltTextures) raylib.Texture {
+    return alt_textures[@intFromEnum(alt)];
+}
 
 const CraftingRecipe = struct {
     const RecipeItem = struct {item: Item, count: usize};
@@ -245,7 +275,7 @@ fn draw_texture_pro(texture: raylib.Texture, x: f32, y: f32, width: f32, height:
 }
 
 fn draw_inventory_slot(inventory_slot: *const InventorySlot, x: f32, y: f32, size: f32, tint: raylib.Color, allocator: std.mem.Allocator) void {
-    draw_texture_tint(item_slot_texture, x, y, size, size, tint);
+    draw_texture_tint(get_alt_texture(.item_slot), x, y, size, size, tint);
 
     if(inventory_slot.item_type) |item| {                     
         const item_texture = item.get_texture();
@@ -259,7 +289,7 @@ fn draw_inventory_slot(inventory_slot: *const InventorySlot, x: f32, y: f32, siz
 fn draw_crafting_recipe_output(recipe: *const CraftingRecipe, x: f32, y: f32, size: f32, tint: raylib.Color) void {
     const item_texture = recipe.output.item.get_texture();
 
-    draw_texture_tint(item_slot_texture, x, y, size, size, tint);
+    draw_texture_tint(get_alt_texture(.item_slot), x, y, size, size, tint);
     draw_texture(item_texture, x, y, size, size);
 }
 
@@ -272,7 +302,7 @@ fn draw_crafting_recipe_input(recipe: *const CraftingRecipe, x: f32, y: f32, siz
         const item_texture = input.item.get_texture();
         const input_x = x + (size * i) + (padding * i);
 
-        draw_texture_tint(item_slot_texture, input_x, y, size, size, raylib.BLUE);
+        draw_texture_tint(get_alt_texture(.item_slot), input_x, y, size, size, raylib.BLUE);
         draw_texture(item_texture, input_x, y, size, size);
 
         var text_buffer = std.mem.zeroes([2]u8); 
@@ -641,9 +671,9 @@ const Tile = enum(u8) {
             .pipe => {
                 const pipe = &game.get_tile_data(tile_index).data.pipe;
                 return switch (pipe.relative_output_direction) {
-                    .up => pipe_tile_texture,
-                    .left => pipe_left_tile_texture,
-                    .right => pipe_right_tile_texture,
+                    .up => get_tile_texture(.pipe),
+                    .left => get_tile_texture(.pipe_left),
+                    .right => get_tile_texture(.pipe_right),
                     .down => unreachable
                 };
             },
@@ -654,20 +684,20 @@ const Tile = enum(u8) {
     fn get_default_texture(self: *const Self) raylib.Texture {
         return switch (self.*) {
             .air => std.debug.panic("tried to get texture of air...\n", .{}),
-            .grass => grass_tile_texture,
-            .stone => stone_tile_texture,
-            .iron_ore => iron_ore_tile_texture,
-            .miner => miner_tile_texture,
-            .coal_ore => coal_ore_tile_texture,
-            .furnace => furnace_tile_texture,
-            .tree_base => tree_base_tile_texture,
-            .tree_0 => tree_0_tile_texture,
-            .pipe => pipe_tile_texture,
-            .pipe_merger => pipe_merger_tile_texture,
-            .extractor => extractor_tile_texture,
-            .pole => pole_tile_texture,
-            .battery => battery_tile_texture,
-            .crusher => crusher_tile_texture,
+            .grass => get_tile_texture(.grass),
+            .stone => get_tile_texture(.stone),
+            .iron_ore => get_tile_texture(.iron_ore),
+            .miner => get_tile_texture(.miner),
+            .coal_ore => get_tile_texture(.coal_ore),
+            .furnace => get_tile_texture(.furnace),
+            .tree_base => get_tile_texture(.tree_base),
+            .tree_0 => get_tile_texture(.tree_0),
+            .pipe => get_tile_texture(.pipe),
+            .pipe_merger => get_tile_texture(.pipe_merger),
+            .extractor => get_tile_texture(.extractor),
+            .pole => get_tile_texture(.pole),
+            .battery => get_tile_texture(.battery),
+            .crusher => get_tile_texture(.crusher),
         };
     }
 
@@ -1500,19 +1530,19 @@ const Item = enum {
 
     fn get_texture(self: *const Self) raylib.Texture {
         return switch (self.*) {  
-            .iron => iron_item_texture,
-            .miner => miner_tile_texture,
-            .coal => coal_item_texture,
-            .furnace => furnace_tile_texture,
-            .iron_ingot => iron_ingot_item_texture,
-            .stone => stone_item_texture,
-            .wood => wood_item_texture,
-            .pipe => pipe_tile_texture,
-            .pipe_merger => pipe_merger_tile_texture,
-            .extractor => extractor_tile_texture,
-            .pole => pole_tile_texture,
-            .battery => battery_tile_texture,
-            .crusher => crusher_tile_texture,
+            .iron => get_item_texture(.iron),
+            .miner => get_tile_texture(.miner),
+            .coal => get_item_texture(.coal),
+            .furnace => get_tile_texture(.furnace),
+            .iron_ingot => get_item_texture(.iron_ingot),
+            .stone => get_tile_texture(.stone),
+            .wood => get_item_texture(.wood),
+            .pipe => get_tile_texture(.pipe),
+            .pipe_merger => get_tile_texture(.pipe_merger),
+            .extractor => get_tile_texture(.extractor),
+            .pole => get_tile_texture(.pole),
+            .battery => get_tile_texture(.battery),
+            .crusher => get_tile_texture(.crusher),
         };
     }
 
@@ -1667,7 +1697,7 @@ const UIIInventorySlot = struct {
     flags: u8,
 
     fn draw(self: *const Self, inventory_slot: *const InventorySlot, tint: raylib.Color, allocator: std.mem.Allocator) void {
-        draw_texture_tint(item_slot_texture, self.x, self.y, self.size, self.size, tint);
+        draw_texture_tint(get_alt_texture(.item_slot), self.x, self.y, self.size, self.size, tint);
 
         if(inventory_slot.item_type) |item| {                     
             const item_texture = item.get_texture();
@@ -2012,6 +2042,7 @@ const Game = struct {
         r: bool,
         e: bool,
         m: bool,
+        t: bool,
         up_arrow: bool,
         down_arrow: bool,
         left_arrow: bool,
@@ -2146,6 +2177,7 @@ const Game = struct {
         self.input.r = raylib.IsKeyPressed(raylib.KEY_R);
         self.input.e = raylib.IsKeyPressed(raylib.KEY_E);
         self.input.m = raylib.IsKeyPressed(raylib.KEY_M);
+        self.input.t = raylib.IsKeyPressed(raylib.KEY_T);
         self.input.up_arrow = raylib.IsKeyPressed(raylib.KEY_UP);
         self.input.down_arrow = raylib.IsKeyPressed(raylib.KEY_DOWN);
         self.input.left_arrow = raylib.IsKeyPressed(raylib.KEY_LEFT);
@@ -2221,6 +2253,12 @@ const Game = struct {
             if(time_per_tick < tick_increment) {
                 time_per_tick = tick_increment;
             }
+        }
+
+        if(self.input.t) {
+            load_textures() catch |err| {
+                std.debug.panic("error when reloading textures during runtime: {}\n", .{err});
+            };
         }
 
         // memory debug toggle
@@ -2676,7 +2714,7 @@ const Game = struct {
                     const background_height = 300;
                     const background_width = 400;
 
-                    draw_texture_pro(item_slot_texture, window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.BLACK, false);
+                    draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.BLACK, false);
     
                     if(self.forground_tiles[miner_ui.tile_index].tile != .miner) {
                         self.close_inventory();
@@ -2701,7 +2739,7 @@ const Game = struct {
                     miner_ui.output_slot.draw(&miner.output, raylib.RED, self.scratch_space.allocator());
                 },
                 .furnace_inventory => |*furnace_ui| {
-                    draw_texture_pro(item_slot_texture, window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.ORANGE, true);
+                    draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.ORANGE, true);
     
                     if(self.forground_tiles[furnace_ui.tile_index].tile != .furnace) {
                         self.close_inventory();
@@ -2732,7 +2770,7 @@ const Game = struct {
                     const background_height = 300;
                     const background_width = 400;
 
-                    draw_texture_pro(item_slot_texture, window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.WHITE, false);
+                    draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.WHITE, false);
     
                     if(self.forground_tiles[crusher_ui.tile_index].tile != .crusher) {
                         self.close_inventory();
@@ -3497,6 +3535,56 @@ fn init_belt_splines() void {
     };
 }
 
+fn load_textures() !void {
+    const Loaded = struct {
+        var loaded = false;
+    };
+
+    if(Loaded.loaded) {
+        for(&tile_textures) |texture| {
+            raylib.UnloadTexture(texture);
+        }
+
+        for(&item_textures) |texture| {
+            raylib.UnloadTexture(texture);
+        }
+    }
+
+    tile_textures = .{
+       try load_texture(grass_tile_image_path),
+       try load_texture(stone_tile_image_path),
+       try load_texture(iron_ore_tile_image_path),
+       try load_texture(miner_tile_image_path),
+       try load_texture(coal_ore_tile_image_path),
+       try load_texture(furnace_tile_image_path),
+       try load_texture(tree_base_image_path),
+       try load_texture(tree_0_image_path),
+       try load_texture(extractor_image_path),
+       try load_texture(pipe_image_path),
+       try load_texture(pipe_left_image_path),
+       try load_texture(pipe_right_image_path),
+       try load_texture(pipe_merger_image_path),
+       try load_texture(pole_image_path),
+       try load_texture(battery_image_path),
+       try load_texture(crusher_image_path),
+    };
+
+    item_textures = .{
+       try load_texture(iron_item_image_path),
+       try load_texture(coal_item_image_path),
+       try load_texture(furnace_tile_image_path),
+       try load_texture(iron_ingot_item_image_path),
+       try load_texture(stone_item_image_path),
+       try load_texture(wood_item_image_path),
+    };
+
+    alt_textures = .{
+       try load_texture(item_slot_image_path),
+    };
+
+    Loaded.loaded = true;
+}
+
 /////////////////////////////////////////////////////////////////////////////////
 ///                         @main
 /////////////////////////////////////////////////////////////////////////////////
@@ -3515,35 +3603,12 @@ fn main_game() !void {
  
     const allocator = game_arena.allocator();
 
-    init_belt_splines();  
+    init_belt_splines();
+    try load_textures();
     
     // tile texture setup
-    grass_tile_texture =        try load_texture(grass_tile_image_path);
-    stone_tile_texture =        try load_texture(stone_tile_image_path);
-    iron_ore_tile_texture =     try load_texture(iron_ore_tile_image_path);
-    miner_tile_texture =        try load_texture(miner_tile_image_path);
-    coal_ore_tile_texture =     try load_texture(coal_ore_tile_image_path);
-    tree_base_tile_texture =    try load_texture(tree_base_image_path);
-    tree_0_tile_texture =       try load_texture(tree_0_image_path);
-    extractor_tile_texture =    try load_texture(extractor_image_path);
-    pipe_tile_texture =         try load_texture(pipe_image_path);
-    pipe_left_tile_texture =    try load_texture(pipe_left_image_path);
-    pipe_right_tile_texture =   try load_texture(pipe_right_image_path);
-    pipe_merger_tile_texture =  try load_texture(pipe_merger_image_path);
-    pole_tile_texture =         try load_texture(pole_image_path);
-    battery_tile_texture =      try load_texture(battery_image_path);
-    crusher_tile_texture =      try load_texture(crusher_image_path);
-
     // item texture setup
-    iron_item_texture =         try load_texture(iron_item_image_path);
-    item_slot_texture =         try load_texture(item_slot_image_path);
-    coal_item_texture =         try load_texture(coal_item_image_path);
-    furnace_tile_texture =      try load_texture(furnace_tile_image_path);
-    iron_ingot_item_texture =   try load_texture(iron_ingot_item_image_path);
-    stone_item_texture =        try load_texture(stone_item_image_path);
-    wood_item_texture =         try load_texture(wood_item_image_path);
-
-    var game = try Game.init(&game_arena, allocator);
+        var game = try Game.init(&game_arena, allocator);
     game.generate_world();
     game.run();
 
