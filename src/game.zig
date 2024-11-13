@@ -43,7 +43,7 @@ pub const GameState = struct {
     networks: std.ArrayList(Network),
     network_nodes: std.ArrayList(NetworkNode),
     world_gen_noise: fastnoise.Noise(f32),
-    ui_state: UI,
+    ui: UI,
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         const background_tiles = try allocator.alloc(Tile, world_tile_width * world_tile_height);
@@ -87,7 +87,7 @@ pub const GameState = struct {
                 .cellular_jitter_mod = 0.88,
                 .octaves = 2
             },
-            .ui_state = UI.init(),
+            .ui = UI.init(),
         };
 
         // temp adding items to inventory 
@@ -1491,131 +1491,37 @@ const UIIInventorySlot = struct {
     }
 };
 
-const UIPanel = union(enum) {
-    empty: struct {},
-    miner_inventory: struct {
-        tile_index: usize,
-        input_slot: UIIInventorySlot,
-        output_slot: UIIInventorySlot,
-    },
-    furnace_inventory: struct {
-        tile_index: usize,
-        input_fuel_slot: UIIInventorySlot,
-        input_ingredient_slot: UIIInventorySlot,
-        output_slot: UIIInventorySlot,
-    },
-    crusher_inventory: struct {
-        tile_index: usize,
-        input_slot: UIIInventorySlot,
-        output_slot: UIIInventorySlot,
-    },
-
-    fn empty() UIPanel {
-        return UIPanel{
-            .empty = .{}
-        };   
-    }
-
-    fn miner_inventory(tile_index: usize) UIPanel {
-        const slot_size = 50;
-        
-        const input_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
-        const output_slot_x = (window_width() * 0.5) + 300 - (slot_size * 0.5);
-
-        const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
-
-        return UIPanel{
-            .miner_inventory = .{
-                .tile_index = tile_index,
-                .input_slot = .{
-                    .x = input_slot_x,
-                    .y = slot_y,
-                    .size = slot_size,
-                    .flags = UIIInventorySlot.only_fuel_flag,
-                },
-                .output_slot = .{
-                    .x = output_slot_x,
-                    .y = slot_y,
-                    .size = slot_size,
-                    .flags = UIIInventorySlot.only_take_flag
-                }
-            }
-        };   
-    }
-
-    fn furnace_inventory(tile_index: usize) UIPanel {
-        const slot_size = 50;
-        
-        const input_fuel_slot_x = (window_width() * 0.5) - 100 - (slot_size * 0.5);
-        const input_ingredient_slot_x = (window_width() * 0.5) - (slot_size * 0.5);
-        const output_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
-
-        const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
-
-        return UIPanel{
-            .furnace_inventory =.{
-                .tile_index = tile_index,
-                .input_fuel_slot = .{
-                    .x = input_fuel_slot_x,
-                    .y = slot_y,
-                    .size = slot_size,
-                    .flags = UIIInventorySlot.only_fuel_flag,
-                },
-                .input_ingredient_slot =.{
-                    .x = input_ingredient_slot_x,
-                    .y = slot_y,
-                    .size = slot_size,
-                    .flags = UIIInventorySlot.only_smeltable_flag
-                },
-                .output_slot = .{
-                    .x = output_slot_x,
-                    .y = slot_y,
-                    .size = slot_size,
-                    .flags = UIIInventorySlot.only_take_flag
-                }
-            }
-        };   
-    }
-
-    fn crusher_inventory(tile_index: usize) UIPanel {
-        const slot_size = 50;
-        
-        const input_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
-        const output_slot_x = (window_width() * 0.5) + 300 - (slot_size * 0.5);
-
-        const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
-
-        return UIPanel{
-            .crusher_inventory = .{
-                .tile_index = tile_index,
-                .input_slot = .{
-                    .x = input_slot_x,
-                    .y = slot_y,
-                    .size = slot_size,
-                    .flags = UIIInventorySlot.only_crushable_flag,
-                },
-                .output_slot = .{
-                    .x = output_slot_x,
-                    .y = slot_y,
-                    .size = slot_size,
-                    .flags = UIIInventorySlot.only_take_flag
-                }
-            }
-        };   
-    }
-};
-
 const UI = struct {
     const Self = @This();
 
     in_hand: InventorySlot,
     player_panel: [player_inventory_size]UIIInventorySlot,
-    current_open_panel: UIPanel, 
+    miner_panel: struct {
+        tile_index: usize,
+        input_slot: UIIInventorySlot,
+        output_slot: UIIInventorySlot,
+    },
+    furnace_panel: struct {
+        tile_index: usize,
+        input_fuel_slot: UIIInventorySlot,
+        input_ingredient_slot: UIIInventorySlot,
+        output_slot: UIIInventorySlot,
+    },
+    crusher_panel: struct {
+        tile_index: usize,
+        input_slot: UIIInventorySlot,
+        output_slot: UIIInventorySlot,
+    },
+    current_panel: enum {
+        none,
+        miner,
+        furnace,
+        crusher
+    },
 
     fn init() Self {
         var ui: Self = undefined;
 
-        ui.current_open_panel = UIPanel.empty();
         ui.in_hand = InventorySlot{
             .item_type = null,
             .count = 0
@@ -1646,9 +1552,136 @@ const UI = struct {
             }
         }
 
+        // miner panel init
+        {
+            const slot_size = 50;
+            
+            const input_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
+            const output_slot_x = (window_width() * 0.5) + 300 - (slot_size * 0.5);
+    
+            const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
+    
+            ui.miner_panel = .{
+                .tile_index = 0,
+                .input_slot = .{
+                    .x = input_slot_x,
+                    .y = slot_y,
+                    .size = slot_size,
+                    .flags = UIIInventorySlot.only_fuel_flag,
+                },
+                .output_slot = .{
+                    .x = output_slot_x,
+                    .y = slot_y,
+                    .size = slot_size,
+                    .flags = UIIInventorySlot.only_take_flag
+                }
+            };
+        }
+
+        // furnace panel init
+        {
+            const slot_size = 50;
+            
+            const input_fuel_slot_x = (window_width() * 0.5) - 100 - (slot_size * 0.5);
+            const input_ingredient_slot_x = (window_width() * 0.5) - (slot_size * 0.5);
+            const output_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
+    
+            const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
+
+            ui.furnace_panel =.{
+                .tile_index = 0,
+                .input_fuel_slot = .{
+                    .x = input_fuel_slot_x,
+                    .y = slot_y,
+                    .size = slot_size,
+                    .flags = UIIInventorySlot.only_fuel_flag,
+                },
+                .input_ingredient_slot =.{
+                    .x = input_ingredient_slot_x,
+                    .y = slot_y,
+                    .size = slot_size,
+                    .flags = UIIInventorySlot.only_smeltable_flag
+                },
+                .output_slot = .{
+                    .x = output_slot_x,
+                    .y = slot_y,
+                    .size = slot_size,
+                    .flags = UIIInventorySlot.only_take_flag
+                }
+            };
+        }
+
+        // crusher inventory init
+        {
+            const slot_size = 50;
+            
+            const input_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
+            const output_slot_x = (window_width() * 0.5) + 300 - (slot_size * 0.5);
+    
+            const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
+
+            ui.crusher_panel = .{
+                .tile_index = 0,
+                .input_slot = .{
+                    .x = input_slot_x,
+                    .y = slot_y,
+                    .size = slot_size,
+                    .flags = UIIInventorySlot.only_crushable_flag,
+                },
+                .output_slot = .{
+                    .x = output_slot_x,
+                    .y = slot_y,
+                    .size = slot_size,
+                    .flags = UIIInventorySlot.only_take_flag
+                }
+            };
+        }
+
         return ui;
-    }
+    } 
 };
+
+fn open_inventory(state: *State, tile_index: usize) void {
+    // cant open inventory when one is already open
+    std.debug.assert(state.g.ui.current_panel == .none);
+
+    const tile = state.g.forground_tiles[tile_index].tile;
+
+    if(!tile.has_clickable_ui()) {
+        return;
+    }
+
+    switch (tile) {
+        .miner => {
+            state.g.ui.current_panel = .miner;
+            state.g.ui.miner_panel.tile_index = tile_index;
+        },
+        .furnace => {
+            state.g.ui.current_panel = .furnace;
+            state.g.ui.furnace_panel.tile_index = tile_index;
+        },
+        .crusher => {
+            state.g.ui.current_panel = .crusher;
+            state.g.ui.crusher_panel.tile_index = tile_index;
+        },
+        else => unreachable,
+    } 
+}
+
+fn close_inventory(state: *State) void {
+    state.g.ui.current_panel = .none;
+        
+    state.g.ui.miner_panel.tile_index = 0;
+    state.g.ui.furnace_panel.tile_index = 0;
+    state.g.ui.crusher_panel.tile_index = 0;
+}
+
+fn is_viewing_inventory(state: *const State) bool {
+    return switch (state.g.ui.current_panel) {
+        .none => false,
+        else => true,
+    };
+}
 
 /////////////////////////////////////////////////////////////////////////////////
 ///                         @inventory
@@ -1925,7 +1958,7 @@ pub fn update(state: *State, delta_time: f32) void {
         tick_update(state);
     }
 
-    // tick rate update
+    // tick changing update
     {
         // also min tick speed
         const tick_increment = 0.01;
@@ -1945,75 +1978,81 @@ pub fn update(state: *State, delta_time: f32) void {
         }
     }
 
-    if(state.input.t) {
-        load_resources() catch |err| {
-            std.debug.panic("error when reloading textures during runtime: {}\n", .{err});
-        };
-    }
+    // basic input update
+    {
+        if(state.input.t) {
+            load_resources() catch |err| {
+                std.debug.panic("error when reloading textures during runtime: {}\n", .{err});
+            };
+        }
+    
+        if(state.input.m) {
+            debug_memory_usage = !debug_memory_usage;
+        }
+    
+        // player update
+        if(state.input.w) {
+            state.g.camera.target.y -= player_speed * delta_time;
+        }
+    
+        if(state.input.a) {
+            state.g.camera.target.x -= player_speed * delta_time;
+        }
+    
+        if(state.input.s) {
+            state.g.camera.target.y += player_speed * delta_time;
+        }
+    
+        if(state.input.d) {
+            state.g.camera.target.x += player_speed * delta_time;
+        }
 
-    // memory debug toggle
-    if(state.input.m) {
-        debug_memory_usage = !debug_memory_usage;
-    }
-
-    // player update
-    if(state.input.w) {
-        state.g.camera.target.y -= player_speed * delta_time;
-    }
-
-    if(state.input.a) {
-        state.g.camera.target.x -= player_speed * delta_time;
-    }
-
-    if(state.input.s) {
-        state.g.camera.target.y += player_speed * delta_time;
-    }
-
-    if(state.input.d) {
-        state.g.camera.target.x += player_speed * delta_time;
-    }
-
-    if(state.input.r) {
-        // only change direction if current slot is a tile
-        // that can be placed and can be rotated
-        const slot = state.g.player.get_selected_inventory_slot();
-        if(slot.item_type) |item| {
-            if(item.tile_when_placed()) |tile| {
-                if(tile.has_direction()) {
-                    state.g.player.placement_dirction.next();
+        // ui controls
+        if(state.input.e) {
+            close_inventory(state);
+        }
+    
+        if(state.input.r) {
+            // only change direction if current slot is a tile
+            // that can be placed and can be rotated
+            const slot = state.g.player.get_selected_inventory_slot();
+            if(slot.item_type) |item| {
+                if(item.tile_when_placed()) |tile| {
+                    if(tile.has_direction()) {
+                        state.g.player.placement_dirction.next();
+                    }
                 }
             }
         }
     }
 
-    // inventory
-    for(0..state.input.numbers.len) |i| {
-        if(state.input.numbers[i]) {
-            state.g.player.selected_item = i;
+    // hud inventory update
+    {
+        for(0..state.input.numbers.len) |i| {
+            if(state.input.numbers[i]) {
+                state.g.player.selected_item = i;
+            }
         }
-    }
-
-    if(state.input.scroll > 0 and state.g.player.selected_item > 0 and !state.input.left_shift) {
-        state.g.player.selected_item -= 1;
-
-    } else if(state.input.scroll < 0 and state.g.player.selected_item < state.g.player.inventory.len - 1 and !state.input.left_shift) {
-        state.g.player.selected_item += 1;
-    }
-
-    // ui controls
-    if(state.input.e) {
-        close_inventory(state);
+    
+        if(state.input.scroll > 0 and state.g.player.selected_item > 0 and !state.input.left_shift) {
+            state.g.player.selected_item -= 1;
+    
+        } else if(state.input.scroll < 0 and state.g.player.selected_item < state.g.player.inventory.len - 1 and !state.input.left_shift) {
+            state.g.player.selected_item += 1;
+        } 
     }
 
     // camera update
-    const zoom_amount = 0.2;
-    if(state.input.up_arrow) {
-        state.g.camera.zoom += state.g.camera.zoom * zoom_amount;
-    }
-
-    if(state.input.down_arrow or (state.input.left_shift and state.input.scroll < 0)) {
-        state.g.camera.zoom -= state.g.camera.zoom * zoom_amount;
-        if(state.g.camera.zoom <= 0.4) state.g.camera.zoom = 0.4;
+    {
+        const zoom_amount = 0.2;
+        if(state.input.up_arrow) {
+            state.g.camera.zoom += state.g.camera.zoom * zoom_amount;
+        }
+    
+        if(state.input.down_arrow or (state.input.left_shift and state.input.scroll < 0)) {
+            state.g.camera.zoom -= state.g.camera.zoom * zoom_amount;
+            if(state.g.camera.zoom <= 0.4) state.g.camera.zoom = 0.4;
+        }
     }
 
     mouse_update: {
@@ -2063,7 +2102,7 @@ pub fn update(state: *State, delta_time: f32) void {
         }
     }
 
-    // interactive panels and inventory update
+    // panels UI and inventory panel update
     panels: {
         const mouse_position = get_mouse_screen_position();
 
@@ -2072,11 +2111,11 @@ pub fn update(state: *State, delta_time: f32) void {
         var target_slots: ?struct {ui_slot: *UIIInventorySlot, slot: *InventorySlot} = null;
 
         find_target_slot: {
-            for(&state.g.ui_state.player_panel, 0..) |*ui_slot, i| {
+            for(&state.g.ui.player_panel, 0..) |*ui_slot, i| {
                 if(ui_slot.mouse_over(mouse_position)) {
                     const player_inventory_slot = &state.g.player.inventory[i];
                     target_slots = .{
-                        .ui_slot = &state.g.ui_state.player_panel[i],
+                        .ui_slot = &state.g.ui.player_panel[i],
                         .slot = player_inventory_slot
                     };
 
@@ -2084,89 +2123,92 @@ pub fn update(state: *State, delta_time: f32) void {
                 }
             }
 
-            switch (state.g.ui_state.current_open_panel) {
-                .empty => break :panels,
-                .miner_inventory => |*miner_inventory| {
-                    if(state.g.forground_tiles[miner_inventory.tile_index].tile != .miner) {
+            switch (state.g.ui.current_panel) {
+                .none => break :panels,
+                .miner => {
+                    const miner_panel = &state.g.ui.miner_panel;
+                    if(state.g.forground_tiles[miner_panel.tile_index].tile != .miner) {
                         close_inventory(state);
                         break :panels;
                     }
 
-                    const miner_tile_data = get_tile_data(state, miner_inventory.tile_index);
+                    const miner_tile_data = get_tile_data(state, miner_panel.tile_index);
 
-                    if(miner_inventory.input_slot.mouse_over(mouse_position)) {
+                    if(miner_panel.input_slot.mouse_over(mouse_position)) {
                         target_slots = .{
-                            .ui_slot = &miner_inventory.input_slot,
+                            .ui_slot = &miner_panel.input_slot,
                             .slot = &miner_tile_data.data.miner.input
                         };
 
                         break :find_target_slot;
                     }
 
-                    if(miner_inventory.output_slot.mouse_over(mouse_position)) {
+                    if(miner_panel.output_slot.mouse_over(mouse_position)) {
                         target_slots = .{
-                            .ui_slot = &miner_inventory.output_slot,
+                            .ui_slot = &miner_panel.output_slot,
                             .slot = &miner_tile_data.data.miner.output
                         };
 
                         break :find_target_slot;
                     }
                 },
-                .furnace_inventory => |*furnace_inventory| {
-                    if(state.g.forground_tiles[furnace_inventory.tile_index].tile != .furnace) {
+                .furnace => {
+                    const furnace_panel = &state.g.ui.furnace_panel;
+                    if(state.g.forground_tiles[furnace_panel.tile_index].tile != .furnace) {
                         close_inventory(state);
                         break :panels;
                     }
 
-                    const furnace_tile_data = get_tile_data(state, furnace_inventory.tile_index);
+                    const furnace_tile_data = get_tile_data(state, furnace_panel.tile_index);
 
-                    if(furnace_inventory.input_fuel_slot.mouse_over(mouse_position)) {
+                    if(furnace_panel.input_fuel_slot.mouse_over(mouse_position)) {
                         target_slots = .{
-                            .ui_slot = &furnace_inventory.input_fuel_slot,
+                            .ui_slot = &furnace_panel.input_fuel_slot,
                             .slot = &furnace_tile_data.data.furnace.fuel_input
                         };
 
                         break :find_target_slot;
                     }
 
-                    if(furnace_inventory.input_ingredient_slot.mouse_over(mouse_position)) {
+                    if(furnace_panel.input_ingredient_slot.mouse_over(mouse_position)) {
                         target_slots = .{
-                            .ui_slot = &furnace_inventory.input_ingredient_slot,
+                            .ui_slot = &furnace_panel.input_ingredient_slot,
                             .slot = &furnace_tile_data.data.furnace.ingredient_input
                         };
 
                         break :find_target_slot;
                     }
 
-                    if(furnace_inventory.output_slot.mouse_over(mouse_position)) {
+                    if(furnace_panel.output_slot.mouse_over(mouse_position)) {
                         target_slots = .{
-                            .ui_slot = &furnace_inventory.output_slot,
+                            .ui_slot = &furnace_panel.output_slot,
                             .slot = &furnace_tile_data.data.furnace.output
                         };
 
                         break :find_target_slot;
                     }
                 },
-                .crusher_inventory => |*crusher_inventory| {
-                    if(state.g.forground_tiles[crusher_inventory.tile_index].tile != .crusher) {
+                .crusher => {
+                    const crusher_panel = &state.g.ui.crusher_panel;
+                    if(state.g.forground_tiles[crusher_panel.tile_index].tile != .crusher) {
                         close_inventory(state);
                         break :panels;
                     }
 
-                    const crusher_tile_data = get_tile_data(state, crusher_inventory.tile_index);
+                    const crusher_tile_data = get_tile_data(state, crusher_panel.tile_index);
 
-                    if(crusher_inventory.input_slot.mouse_over(mouse_position)) {
+                    if(crusher_panel.input_slot.mouse_over(mouse_position)) {
                         target_slots = .{
-                            .ui_slot = &crusher_inventory.input_slot,
+                            .ui_slot = &crusher_panel.input_slot,
                             .slot = &crusher_tile_data.data.crusher.input
                         };
 
                         break :find_target_slot;
                     }
 
-                    if(crusher_inventory.output_slot.mouse_over(mouse_position)) {
+                    if(crusher_panel.output_slot.mouse_over(mouse_position)) {
                         target_slots = .{
-                            .ui_slot = &crusher_inventory.output_slot,
+                            .ui_slot = &crusher_panel.output_slot,
                             .slot = &crusher_tile_data.data.crusher.output
                         };
 
@@ -2183,7 +2225,7 @@ pub fn update(state: *State, delta_time: f32) void {
                 break :mouse_interaction;
             }
 
-            const in_hand = &state.g.ui_state.in_hand;
+            const in_hand = &state.g.ui.in_hand;
             const target_ui_slot = target_slots.?.ui_slot;
             const target_game_slot = target_slots.?.slot;
 
@@ -2418,86 +2460,92 @@ pub fn draw(state: *State) void {
         const mouse_screen_position = get_mouse_screen_position();
 
         // draw current open panel
-        switch (state.g.ui_state.current_open_panel) {
-            .empty => {
+        switch (state.g.ui.current_panel) {
+            .none => {
                 break :game_ui_drawing;
             },
-            .miner_inventory => |*miner_ui| {
+            .miner => {
+                const miner_panel = &state.g.ui.miner_panel;
+
                 const background_height = 300;
                 const background_width = 400;
 
                 draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.BLACK, false);
 
-                if(state.g.forground_tiles[miner_ui.tile_index].tile != .miner) {
+                if(state.g.forground_tiles[miner_panel.tile_index].tile != .miner) {
                     close_inventory(state);
                     break :game_ui_drawing;
                 }
 
-                const miner = &get_tile_data(state, miner_ui.tile_index).data.miner;
+                const miner = &get_tile_data(state, miner_panel.tile_index).data.miner;
 
                 const progress_bar_width = 5;
-                const fuel_progress_bar_x = miner_ui.input_slot.x - 10 - progress_bar_width;
-                const fuel_progress_bar_y = miner_ui.input_slot.y;
+                const fuel_progress_bar_x = miner_panel.input_slot.x - 10 - progress_bar_width;
+                const fuel_progress_bar_y = miner_panel.input_slot.y;
 
                 if(miner.fuel_item_in_use) |fuel_item| {
-                    draw_progress_bar_vertical(fuel_progress_bar_x, fuel_progress_bar_y, 10, miner_ui.input_slot.size, raylib.RED, raylib.ORANGE, miner.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.miner_max_progress);
+                    draw_progress_bar_vertical(fuel_progress_bar_x, fuel_progress_bar_y, 10, miner_panel.input_slot.size, raylib.RED, raylib.ORANGE, miner.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.miner_max_progress);
                 }
 
-                const output_progress_bar_x = miner_ui.output_slot.x - 10 - progress_bar_width;
-                const output_progress_bar_y = miner_ui.output_slot.y;
-                draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, miner_ui.output_slot.size, raylib.BLUE, raylib.WHITE, miner.progress, Tile.miner_max_progress);
+                const output_progress_bar_x = miner_panel.output_slot.x - 10 - progress_bar_width;
+                const output_progress_bar_y = miner_panel.output_slot.y;
+                draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, miner_panel.output_slot.size, raylib.BLUE, raylib.WHITE, miner.progress, Tile.miner_max_progress);
 
-                miner_ui.input_slot.draw(&miner.input, raylib.BLUE, state.scratch_space.allocator());
-                miner_ui.output_slot.draw(&miner.output, raylib.RED, state.scratch_space.allocator());
+                miner_panel.input_slot.draw(&miner.input, raylib.BLUE, state.scratch_space.allocator());
+                miner_panel.output_slot.draw(&miner.output, raylib.RED, state.scratch_space.allocator());
             },
-            .furnace_inventory => |*furnace_ui| {
+            .furnace => {
+                const furnace_panel = &state.g.ui.furnace_panel;
+
                 draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.ORANGE, true);
 
-                if(state.g.forground_tiles[furnace_ui.tile_index].tile != .furnace) {
+                if(state.g.forground_tiles[furnace_panel.tile_index].tile != .furnace) {
                     close_inventory(state);
                     break :game_ui_drawing;
                 }
 
-                const furnace = &get_tile_data(state, furnace_ui.tile_index).data.furnace;
+                const furnace = &get_tile_data(state, furnace_panel.tile_index).data.furnace;
 
                 const progress_bar_width = 5;
 
-                const fuel_progress_bar_x = furnace_ui.input_fuel_slot.x - 10 - progress_bar_width;
-                const fuel_progress_bar_y = furnace_ui.input_fuel_slot.y;
+                const fuel_progress_bar_x = furnace_panel.input_fuel_slot.x - 10 - progress_bar_width;
+                const fuel_progress_bar_y = furnace_panel.input_fuel_slot.y;
 
                 if(furnace.fuel_item_in_use) |fuel_item| {
-                    draw_progress_bar_vertical(fuel_progress_bar_x, fuel_progress_bar_y, 10, furnace_ui.input_fuel_slot.size, raylib.RED, raylib.ORANGE, furnace.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.furnace_max_progress);
+                    draw_progress_bar_vertical(fuel_progress_bar_x, fuel_progress_bar_y, 10, furnace_panel.input_fuel_slot.size, raylib.RED, raylib.ORANGE, furnace.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.furnace_max_progress);
                 }
 
-                const output_progress_bar_x = furnace_ui.output_slot.x - 10 - progress_bar_width;
-                const output_progress_bar_y = furnace_ui.output_slot.y;
+                const output_progress_bar_x = furnace_panel.output_slot.x - 10 - progress_bar_width;
+                const output_progress_bar_y = furnace_panel.output_slot.y;
 
-                draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, furnace_ui.output_slot.size, raylib.BLUE, raylib.WHITE, furnace.progress, Tile.furnace_max_progress);
+                draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, furnace_panel.output_slot.size, raylib.BLUE, raylib.WHITE, furnace.progress, Tile.furnace_max_progress);
 
-                furnace_ui.input_ingredient_slot.draw(&furnace.ingredient_input, raylib.BLUE, state.scratch_space.allocator());
-                furnace_ui.input_fuel_slot.draw(&furnace.fuel_input, raylib.BLUE, state.scratch_space.allocator());
-                furnace_ui.output_slot.draw(&furnace.output, raylib.RED, state.scratch_space.allocator());
+                furnace_panel.input_ingredient_slot.draw(&furnace.ingredient_input, raylib.BLUE, state.scratch_space.allocator());
+                furnace_panel.input_fuel_slot.draw(&furnace.fuel_input, raylib.BLUE, state.scratch_space.allocator());
+                furnace_panel.output_slot.draw(&furnace.output, raylib.RED, state.scratch_space.allocator());
             },
-            .crusher_inventory => |*crusher_ui| {
+            .crusher => {
+                const crusher_panel = &state.g.ui.crusher_panel;
+
                 const background_height = 300;
                 const background_width = 400;
 
                 draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.WHITE, false);
 
-                if(state.g.forground_tiles[crusher_ui.tile_index].tile != .crusher) {
+                if(state.g.forground_tiles[crusher_panel.tile_index].tile != .crusher) {
                     close_inventory(state);
                     break :game_ui_drawing;
                 }
 
-                const crusher = &get_tile_data(state, crusher_ui.tile_index).data.crusher;
+                const crusher = &get_tile_data(state, crusher_panel.tile_index).data.crusher;
 
-                crusher_ui.input_slot.draw(&crusher.input, raylib.BLUE, state.scratch_space.allocator());
-                crusher_ui.output_slot.draw(&crusher.output, raylib.RED, state.scratch_space.allocator());
+                crusher_panel.input_slot.draw(&crusher.input, raylib.BLUE, state.scratch_space.allocator());
+                crusher_panel.output_slot.draw(&crusher.output, raylib.RED, state.scratch_space.allocator());
             },
         }
 
         // draw player inventory
-        for(&state.g.ui_state.player_panel, 0..) |*ui_slot, i| {
+        for(&state.g.ui.player_panel, 0..) |*ui_slot, i| {
             const color = switch (i) {
                 0 => raylib.RED,
                 1 => raylib.ORANGE,
@@ -2515,7 +2563,7 @@ pub fn draw(state: *State) void {
         }
 
         // draw item in hand
-        if(state.g.ui_state.in_hand.item_type) |item| {
+        if(state.g.ui.in_hand.item_type) |item| {
             const item_texture = item.get_texture();
             const icon_x = mouse_screen_position.x + 10;
             const icon_y = mouse_screen_position.y + 10;
@@ -2523,7 +2571,7 @@ pub fn draw(state: *State) void {
             draw_texture(item_texture, icon_x, icon_y, 50, 50);
 
             // max size is 99 so 2 bytes is fine here
-            const string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{state.g.ui_state.in_hand.count}) catch unreachable;
+            const string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{state.g.ui.in_hand.count}) catch unreachable;
             draw_text(string, icon_x, icon_y, 20, raylib.WHITE);
         }
     }
@@ -2922,38 +2970,6 @@ fn traverse_nodes_and_replace_network(state: *State, old_network_id: usize) bool
     state.g.networks.append(new_network) catch unreachable;
 
     return false; // no new nodes so return false to call again
-}
-
-fn is_viewing_inventory(state: *const State) bool {
-    return switch (state.g.ui_state.current_open_panel) {
-        .empty => false,
-        else => true,
-    };
-}
-
-fn open_inventory(state: *State, tile_index: usize) void {
-    const tile = state.g.forground_tiles[tile_index].tile;
-
-    if(!tile.has_clickable_ui()) {
-        return;
-    }
-
-    switch (tile) {
-        .miner => {
-            state.g.ui_state.current_open_panel = UIPanel.miner_inventory(tile_index);
-        },
-        .furnace => {
-            state.g.ui_state.current_open_panel = UIPanel.furnace_inventory(tile_index);
-        },
-        .crusher => {
-            state.g.ui_state.current_open_panel = UIPanel.crusher_inventory(tile_index);
-        },
-        else => unreachable,
-    }
-}
-
-fn close_inventory(state: *State) void {
-    state.g.ui_state.current_open_panel = UIPanel.empty();
 }
 
 fn get_mouse_world_position(state: *const State) WorldPosition {
