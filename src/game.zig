@@ -1,22 +1,17 @@
-//       F---------G
-//      /|        /|
-//     B---------C |
-//     | |       | |        <----- what are the secrets of the cube
-//     | E-------|-H
-//     |/        |/
-//     A---------D
-
 const std = @import("std");
 
 const raylib = @cImport(@cInclude("raylib.h"));
 const raygui = @cImport(@cInclude("raygui.h"));
-
 const fastnoise = @import("fastnoise.zig");
 
-const player_speed: f32 = 450;
+const m = @import("main.zig");
 
-const default_screen_width = 1400;
-const default_screen_height = 1000;
+const State = m.State;
+const Spline = m.Spline;
+const get_alt_texture = m.get_alt_texture;
+const get_item_texture = m.get_item_texture;
+const get_tile_texture = m.get_tile_texture;
+const load_resources = m.load_resources;
 
 const tile_width: i64 = 16;
 const tile_height: i64 = 16;
@@ -24,231 +19,99 @@ const tile_height: i64 = 16;
 const world_tile_width = 150;
 const world_tile_height = 150;
 
-var time_per_tick: f32 = 0.1;
-
-const max_item_stack = 99;
-
 const player_inventory_width = 9;
 const player_inventory_height = 9;
 const player_inventory_size = player_inventory_height * player_inventory_width;
 
+const player_speed: f32 = 450;
+
 const debug_networks = true;
 var debug_memory_usage = false; // toggled with m
 
-//        straight                   curved
-// (2 side * 4 directions) + (2 sides * 4 direction * 2 output sides)
-var splines: [24]Spline = undefined;
 
-// spline paths
-//
-const straight_belt_left_spline_path = "straight_belt_left.spline";
-const curved_belt_left_spline_path = "curved_belt_left.spline";
-const curved_belt_right_spline_path = "curved_belt_right.spline";
+const max_item_stack = 99;
 
-// gloabal textures
-//
-// TILES
-var tile_textures: [16]raylib.Texture = .{undefined} ** 16;
-
-// ITEMS
-var item_textures: [5]raylib.Texture = .{undefined} ** 5;
-
-// ALTS
-var alt_textures: [1]raylib.Texture = .{undefined} ** 1;
-
-/////////////////////////////////////////////////////////////////////////////////
-///                         @textures
-////////////////////////////////////////////////////////////////////////////////
-
-// images paths
-//
-// TILES
-const grass_tile_image_path = "tiles/grass.png";
-const stone_tile_image_path = "tiles/stone.png";
-const iron_ore_tile_image_path = "tiles/iron_ore.png";
-const miner_tile_image_path = "tiles/miner.png";
-const coal_ore_tile_image_path = "tiles/coal_ore.png";
-const furnace_tile_image_path = "tiles/furnace.png";
-const tree_base_image_path = "tiles/tree_base.png";
-const tree_0_image_path = "tiles/tree_0.png";
-const extractor_image_path = "tiles/extractor.png";
-const belt_image_path = "tiles/belt.png";
-const belt_left_image_path = "tiles/belt_left.png";
-const belt_right_image_path = "tiles/belt_right.png";
-const pipe_merger_image_path = "tiles/pipe_merger.png";
-const pole_image_path = "tiles/pole.png";
-const battery_image_path = "tiles/battery.png";
-const crusher_image_path = "tiles/crusher.png";
-
-// ITEMS
-const iron_item_image_path = "items/iron.png";
-const coal_item_image_path = "items/coal.png";
-const iron_ingot_item_image_path = "items/iron_ingot.png";
-const stone_item_image_path = "items/stone.png";
-const wood_item_image_path = "items/wood.png";
-
-// ALTS
-const item_slot_image_path = "items/item_slot.png";
-
-const TileTextures = enum {
-    grass,
-    stone,
-    iron_ore,
-    miner,
-    coal_ore,
-    furnace,
-    tree_base,
-    tree_0,
-    extractor,
-    belt,
-    belt_left,
-    belt_right,
-    pipe_merger,
-    pole,
-    battery,
-    crusher
-};
-
-const ItemTextures = enum {
-    iron,
-    coal,
-    iron_ingot,
-    stone,
-    wood
-};
-
-const AltTextures = enum {
-    item_slot
-};
-
-fn get_tile_texture(tile: TileTextures) raylib.Texture {
-    return tile_textures[@intFromEnum(tile)];
-}
-
-fn get_item_texture(item: ItemTextures) raylib.Texture {
-    return item_textures[@intFromEnum(item)];
-}
-
-fn get_alt_texture(alt: AltTextures) raylib.Texture {
-    return alt_textures[@intFromEnum(alt)];
-}
-
-/////////////////////////////////////////////////////////////////////////////////
-///                         @splines
-////////////////////////////////////////////////////////////////////////////////
-pub const SplinePoint = struct {
+pub const GameState = struct {
     const Self = @This();
 
-    x: f32,
-    y: f32,
+    seed: i32,
+    camera: raylib.Camera2D,
+    player: Player,
+    background_tiles: []Tile,
+    forground_tiles: []ForgroundTile,
+    tile_data: std.ArrayList(TileData),
+    networks: std.ArrayList(Network),
+    network_nodes: std.ArrayList(NetworkNode),
+    world_gen_noise: fastnoise.Noise(f32),
+    ui_state: UI,
 
-    pub fn clamp(self: *Self) void {
-        self.x = std.math.clamp(self.x, 0, 1);
-        self.y = std.math.clamp(self.y, 0, 1);
-    } 
-};
+    pub fn init(allocator: std.mem.Allocator) !Self {
+        const background_tiles = try allocator.alloc(Tile, world_tile_width * world_tile_height);
+        const forground_tiles = try allocator.alloc(ForgroundTile, world_tile_width * world_tile_height);
 
-pub const Spline = struct {
-    const Self = @This();
+        for(0..background_tiles.len) |i| {
+            background_tiles[i] = .air;
+            forground_tiles[i] = .{.tile = .air, .direction = .down};
+        }
 
-    const max_points = 5;
-
-    length: usize,
-    buffer: [max_points]SplinePoint,
-
-    pub fn init() Self {
-        return Self{
-            .length = 0,
-            .buffer = [_]SplinePoint{.{.x = 0, .y = 0}} ** max_points,
+        var self = Self {
+            .seed = 16, 
+            .camera = .{
+                .target = .{
+                    .x = @as(f32, @floatFromInt(world_tile_width * tile_width)) * 0.5,
+                    .y = @as(f32, @floatFromInt(world_tile_height * tile_height)) * 0.5,
+                },
+                .offset = .{.x = window_width() / 2, .y = window_height() / 2},
+                .rotation = 0,
+                .zoom = 3.5,
+            },
+            .player = Player{
+                .inventory = std.mem.zeroes([player_inventory_size]InventorySlot),
+                .selected_item = 0,
+                .placement_dirction = .down,
+            },
+            .background_tiles = background_tiles,
+            .forground_tiles = forground_tiles,
+            .tile_data = std.ArrayList(TileData).init(allocator),
+            .networks = std.ArrayList(Network).init(allocator),
+            .network_nodes = std.ArrayList(NetworkNode).init(allocator),
+            .world_gen_noise = fastnoise.Noise(f32) {
+                .seed = 1337,
+                .noise_type = .perlin,
+                .frequency = 0.38717738,
+                .gain = 0.01,
+                .fractal_type = .fbm,
+                .lacunarity = 0.40,
+                .cellular_distance = .euclidean,
+                .cellular_return = .distance2,
+                .cellular_jitter_mod = 0.88,
+                .octaves = 2
+            },
+            .ui_state = UI.init(),
         };
-    }
 
-    fn mirror_x(self: *const Self) Self {
-        var new_spline = self.*;
+        // temp adding items to inventory 
+        self.player.inventory[0] = .{ .item_type = .miner, .count = 99 };
+        self.player.inventory[1] = .{ .item_type = .extractor, .count = 99 };
+        self.player.inventory[2] = .{ .item_type = .belt, .count = 99 };
+        self.player.inventory[3] = .{ .item_type = .pipe_merger, .count = 99 };
+        self.player.inventory[4] = .{ .item_type = .crusher, .count = 99 };
+        self.player.inventory[6] = .{ .item_type = .furnace, .count = 99 };
+        self.player.inventory[7] = .{ .item_type = .pole, .count = 99 };
+        self.player.inventory[8] = .{ .item_type = .battery, .count = 99 };
+    
+        self.player.inventory[9] = .{ .item_type = .coal, .count = 99 };
+        self.player.inventory[10] = .{ .item_type = .coal, .count = 99 };
+        self.player.inventory[11] = .{ .item_type = .coal, .count = 99 };
+        self.player.inventory[12] = .{ .item_type = .iron, .count = 99 };
 
-        for(0..new_spline.length) |i| {
-            const point = &new_spline.buffer[i];
-            point.x = 1 - point.x;
-            point.clamp();
-        }
-
-        return new_spline;
-    }
-
-    fn mirror_y(self: *const Self) Self {
-        var new_spline = self.*;
-
-        for(0..new_spline.length) |i| {
-            const point = &new_spline.buffer[i];
-            point.y = 1 - point.y;
-            point.clamp();
-        }
-
-        return new_spline;
-    }
-
-    fn rotate_clockwise(self: *const Self) Self {
-        var new_spline = self.*;
-
-        for(0..new_spline.length) |i| {
-            const point = &new_spline.buffer[i];
-
-            // translate the origin to be the centre of the 
-            // square and not the top left
-            // 0 -> -1, 0.5 -> 0, 1 -> 1
-            const translated_x = (point.x * 2) - 1;
-            const translated_y = (point.y * 2) - 1;
-
-            const half_pi = std.math.pi * 0.5;
-
-            const rotated_x = (translated_x * std.math.cos(half_pi)) - (translated_y * std.math.sin(half_pi));
-            const rotated_y = (translated_x * std.math.sin(half_pi)) + (translated_y * std.math.cos(half_pi));
-
-            point.x = (rotated_x + 1) / 2;
-            point.y = (rotated_y + 1) / 2;
-
-            point.clamp();
-        }
-
-        return new_spline;
-    }
-
-    fn rotate_counter_clockwise(self: *const Self) Self {
-        var new_spline = self.*;
-
-        for(0..new_spline.length) |i| {
-            const point = &new_spline.buffer[i];
-
-            // translate the origin to be the centre of the 
-            // square and not the top left
-            // 0 -> -1, 0.5 -> 0, 1 -> 1
-            const translated_x = (point.x * 2) - 1;
-            const translated_y = (point.y * 2) - 1;
-
-            const half_pi = -std.math.pi * 0.5;
-
-            const rotated_x = (translated_x * std.math.cos(half_pi)) - (translated_y * std.math.sin(half_pi));
-            const rotated_y = (translated_x * std.math.sin(half_pi)) + (translated_y * std.math.cos(half_pi));
-
-            point.x = (rotated_x + 1) / 2;
-            point.y = (rotated_y + 1) / 2;
-
-            point.clamp();
-        }
-
-        return new_spline;
-    }
-
-    pub fn add_point(self: *Self) void {
-        if(self.length == self.buffer.len) {
-            return;
-        }
-
-        self.buffer[self.length] = .{.x = 0, .y = 0};
-        self.length += 1;
+        return self;
     }
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+///                         @crafting
+/////////////////////////////////////////////////////////////////////////////////
 const CraftingRecipe = struct {
     const RecipeItem = struct {item: Item, count: usize};
 
@@ -303,136 +166,6 @@ const ore_table = [_]struct {
         .frequency = 0.12
     },
 };
-
-fn window_width() f32 {
-    return @as(f32, @floatFromInt(raylib.GetScreenWidth()));
-}
-
-fn window_height() f32 {
-    return @as(f32, @floatFromInt(raylib.GetScreenHeight()));
-}
-
-/////////////////////////////////////////////////////////////////////////////////
-///                         @render
-////////////////////////////////////////////////////////////////////////////////
-fn draw_rectangle(x: f32, y: f32, width: f32, height: f32, color: raylib.Color) void {
-    raylib.DrawRectangle(
-        @as(c_int, @intFromFloat(x)), 
-        @as(c_int, @intFromFloat(y)), 
-        @as(c_int, @intFromFloat(width)), 
-        @as(c_int, @intFromFloat(height)), 
-        color
-    );
-}
-
-fn draw_rectangle_gradient_vertical(x: f32, y: f32, width: f32, height: f32, start_color: raylib.Color, end_color: raylib.Color) void {
-    raylib.DrawRectangleGradientV(
-        @as(c_int, @intFromFloat(x)), 
-        @as(c_int, @intFromFloat(y)), 
-        @as(c_int, @intFromFloat(width)), 
-        @as(c_int, @intFromFloat(height)), 
-        start_color,
-        end_color
-    );
-}
-
-fn draw_circle(x: f32, y: f32, radius: f32, color: raylib.Color) void {
-    raylib.DrawCircle(
-        @as(c_int, @intFromFloat(x)), 
-        @as(c_int, @intFromFloat(y)), 
-        radius, 
-        color
-    );
-}
-
-fn draw_line(start_x: f32, start_y: f32, end_x: f32, end_y: f32, THICKNESS: f32, color: raylib.Color) void {
-    raylib.DrawLineEx(
-        .{.x = start_x, .y = start_y},
-        .{.x = end_x, .y = end_y},
-        THICKNESS,
-        color
-    );
-}
-
-fn draw_text(text: []const u8, x: f32, y: f32, font_size: i32, color: raylib.Color) void {
-    raylib.DrawText(
-        &text[0],
-        @as(c_int, @intFromFloat(x)), 
-        @as(c_int, @intFromFloat(y)), 
-        @as(c_int, @intCast(font_size)), 
-        color
-    );
-}
-
-inline fn draw_texture(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32) void {
-    draw_texture_tint(texture, x, y, width, height, raylib.WHITE);
-}
-
-inline fn draw_texture_tint(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, tint: raylib.Color) void {
-    draw_texture_pro(texture, x, y, width, height, 0, tint, false);
-}
-
-fn draw_texture_pro(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, rotation: f32, tint: raylib.Color, centred: bool) void {
-    // Source rectangle (part of the texture to use for drawing)
-    const source_rectagle: raylib.Rectangle = .{ .x = 0, .y = 0, .width = @as(f32, @floatFromInt(texture.width)), .height = @as(f32, @floatFromInt(texture.height)) };
-
-    // Destination rectangle (screen rectangle where drawing part of texture)
-    var destination_rectangle: raylib.Rectangle = .{ .x = x, .y = y, .width = width, .height = height};
-
-    if(centred) {
-        destination_rectangle.x -= width / 2;
-        destination_rectangle.y -= height / 2;
-    }
-
-    raylib.DrawTexturePro(texture, source_rectagle, destination_rectangle, .{}, rotation, tint);
-}
-
-fn draw_inventory_slot(inventory_slot: *const InventorySlot, x: f32, y: f32, size: f32, tint: raylib.Color, allocator: std.mem.Allocator) void {
-    draw_texture_tint(get_alt_texture(.item_slot), x, y, size, size, tint);
-
-    if(inventory_slot.item_type) |item| {                     
-        const item_texture = item.get_texture();
-        draw_texture(item_texture, x, y, size, size);
-
-        const string = std.fmt.allocPrintZ(allocator, "{}", .{inventory_slot.count}) catch unreachable;
-        draw_text(string, x, y, 20, raylib.WHITE);
-    }
-}
-
-fn draw_crafting_recipe_output(recipe: *const CraftingRecipe, x: f32, y: f32, size: f32, tint: raylib.Color) void {
-    const item_texture = recipe.output.item.get_texture();
-
-    draw_texture_tint(get_alt_texture(.item_slot), x, y, size, size, tint);
-    draw_texture(item_texture, x, y, size, size);
-}
-
-fn draw_crafting_recipe_input(recipe: *const CraftingRecipe, x: f32, y: f32, size: f32) void {
-    const padding = 5;
-
-    for(0..recipe.input_count) |_i| {
-        const i = @as(f32, @floatFromInt(_i));
-        const input = &recipe.inputs[_i];
-        const item_texture = input.item.get_texture();
-        const input_x = x + (size * i) + (padding * i);
-
-        draw_texture_tint(get_alt_texture(.item_slot), input_x, y, size, size, raylib.BLUE);
-        draw_texture(item_texture, input_x, y, size, size);
-
-        var text_buffer = std.mem.zeroes([2]u8); 
-        const string = std.fmt.bufPrint(text_buffer[0..], "{}", .{input.count}) catch unreachable;
-        draw_text(string, input_x, y, 20, raylib.WHITE);
-
-    }
-}
-
-fn draw_progress_bar_vertical(x: f32, y: f32, width: f32, max_height: f32, start_color: raylib.Color, end_color: raylib.Color, value: i64, max_value: i64) void {
-    const progress =  @as(f32, @floatFromInt(value)) / @as(f32, @floatFromInt(max_value));
-    const progress_bar_end_y = y + max_height;
-    const progress_bar_start_y = progress_bar_end_y - (progress * max_height);
-    const progress_bar_height = progress_bar_end_y - progress_bar_start_y;
-
-    draw_rectangle_gradient_vertical(x, progress_bar_start_y, width, progress_bar_height, end_color, start_color);
-}
 
 const TilePosition = struct {
     const Self = @This();
@@ -804,10 +537,10 @@ const Tile = enum(u8) {
         };
     }
 
-    fn get_texture(self: *const Self, tile_index: usize, game: *const Game) raylib.Texture {
+    fn get_texture(self: *const Self, tile_index: usize, state: *const State) raylib.Texture {
         return switch (self.*) {
             .belt => {
-                const belt = &game.get_tile_data(tile_index).data.belt;
+                const belt = &get_tile_data(state, tile_index).data.belt;
                 return switch (belt.relative_output_direction) {
                     .up => get_tile_texture(.belt),
                     .left => get_tile_texture(.belt_left),
@@ -848,7 +581,7 @@ const Tile = enum(u8) {
 
     // when a tile is place or updated can it
     // tuen to this tile to give items
-    fn can_belt_turn_to(self: Self, from_index: usize, tile_index: usize, game: *const Game) bool {
+    fn can_belt_turn_to(self: Self, from_index: usize, tile_index: usize, state: *const State) bool {
         switch (self) {
             .furnace => return true,
             .belt => {
@@ -857,7 +590,7 @@ const Tile = enum(u8) {
                     return false;
                 }
 
-                const current_direction = game.forground_tiles[tile_index].direction;
+                const current_direction = state.g.forground_tiles[tile_index].direction;
                 const input_position = current_position.get_adjacent_tile_at_direction(current_direction);
                 if(!input_position.is_valid()) {
                     return false;
@@ -871,7 +604,7 @@ const Tile = enum(u8) {
                     return false;
                 }
 
-                const current_direction = game.forground_tiles[tile_index].direction;
+                const current_direction = state.g.forground_tiles[tile_index].direction;
 
                 const input_positions = [_]TilePosition{
                     current_position.get_adjacent_tile_at_direction(current_direction),
@@ -897,18 +630,18 @@ const Tile = enum(u8) {
     // update called when the player removes this tile,
     // after this is called the tile data is removed
     // so no need to cleanup anything
-    fn removed_update(self: Self, tile_index: usize, tile_data: ?*TileData, game: *Game) void {
+    fn removed_update(self: Self, tile_index: usize, tile_data: ?*TileData, state: *State) void {
         switch (self) {
             .miner => {
                 var miner = &tile_data.?.data.miner;
-                game.player.add_stack_from_inventory_slot_to_inventory(&miner.input);
-                game.player.add_stack_from_inventory_slot_to_inventory(&miner.output);
+                state.g.player.add_stack_from_inventory_slot_to_inventory(&miner.input);
+                state.g.player.add_stack_from_inventory_slot_to_inventory(&miner.output);
             },
             .furnace => {
                 var furnace = &tile_data.?.data.furnace;
-                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.fuel_input);
-                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.ingredient_input);
-                game.player.add_stack_from_inventory_slot_to_inventory(&furnace.output);
+                state.g.player.add_stack_from_inventory_slot_to_inventory(&furnace.fuel_input);
+                state.g.player.add_stack_from_inventory_slot_to_inventory(&furnace.ingredient_input);
+                state.g.player.add_stack_from_inventory_slot_to_inventory(&furnace.output);
             },
             .tree_base, .tree_0 => {
                 const current_tile_position = get_tile_position_from_tile_index(tile_index);
@@ -923,10 +656,10 @@ const Tile = enum(u8) {
 
                 const above_tile_index = above_tile_position.get_tile_index();
 
-                if(game.forground_tiles[above_tile_index].tile.is_tree_tile()) {
-                    const removed_tile = game.remove_tile_in_foreground(above_tile_index);
+                if(state.g.forground_tiles[above_tile_index].tile.is_tree_tile()) {
+                    const removed_tile = remove_tile_in_foreground(state, above_tile_index);
                     const item = removed_tile.?.item_when_broken();
-                    _ = game.player.add_item_to_inventory(item.?, 1);
+                    _ = state.g.player.add_item_to_inventory(item.?, 1);
                 }
 
             },
@@ -934,17 +667,17 @@ const Tile = enum(u8) {
         }
     }
 
-    fn tile_update(self: Self, tile_index: usize, tile_data: ?*TileData, game: *Game) void {
+    fn tile_update(self: Self, tile_index: usize, tile_data: ?*TileData, state: *State) void {
         switch (self) {
             .miner => {
                 var miner = &tile_data.?.data.miner;
-                miner.valid_placement = game.background_tiles[tile_index].can_be_mined();
+                miner.valid_placement = state.g.background_tiles[tile_index].can_be_mined();
             },
             .belt => {
                 const belt = &tile_data.?.data.belt;
                 
                 const position = get_tile_position_from_tile_index(tile_index);
-                const current_direction = game.forground_tiles[tile_index].direction;
+                const current_direction = state.g.forground_tiles[tile_index].direction;
 
                 const targets = [_]struct {position: TilePosition, relative_direction: Direction} {
                     .{.position = position.get_adjacent_tile_at_direction(current_direction.relative(belt.relative_output_direction)), .relative_direction = belt.relative_output_direction},
@@ -959,9 +692,9 @@ const Tile = enum(u8) {
                     }
 
                     const target_index = target.position.get_tile_index();
-                    const target_tile = game.forground_tiles[target_index];
+                    const target_tile = state.g.forground_tiles[target_index];
 
-                    if(target_tile.tile.can_belt_turn_to(tile_index, target_index, game)) {
+                    if(target_tile.tile.can_belt_turn_to(tile_index, target_index, state)) {
                         belt.relative_output_direction = target.relative_direction;
                         return;
                     }
@@ -971,9 +704,8 @@ const Tile = enum(u8) {
         }
     }
 
-
     // update called every tick
-    fn tick_update(self: Self, tile_index: usize, tile_data: ?*TileData, game: *Game) void {
+    fn tick_update(self: Self, tile_index: usize, tile_data: ?*TileData, state: *State) void {
         switch (self) {
             .miner => {
                 var miner = &tile_data.?.data.miner;
@@ -997,7 +729,7 @@ const Tile = enum(u8) {
                         if(miner.progress >= Tile.miner_max_progress) {
                             miner.progress = 0;
     
-                            const tile = game.background_tiles[tile_index];
+                            const tile = state.g.background_tiles[tile_index];
                             const item = tile.item_when_mined() orelse unreachable; // if this failed there was a logic error before
                             miner.output.item_type = item;
                             miner.output.count += 1;
@@ -1057,14 +789,14 @@ const Tile = enum(u8) {
                 // check to output items
                 check_output: {
                     const current_position = get_tile_position_from_tile_index(tile_index);
-                    const output_direction = game.forground_tiles[tile_index].direction.relative(belt.relative_output_direction);
+                    const output_direction = state.g.forground_tiles[tile_index].direction.relative(belt.relative_output_direction);
                     const output_position = current_position.get_adjacent_tile_at_direction(output_direction);
                     if(!output_position.is_valid()) {
                         break :check_output;
                     }
 
                     const output_index = output_position.get_tile_index();
-                    const output_tile = game.forground_tiles[output_index].tile;
+                    const output_tile = state.g.forground_tiles[output_index].tile;
                     
                     if(!output_tile.belt_can_give()) {
                         break :check_output;
@@ -1072,7 +804,7 @@ const Tile = enum(u8) {
 
                     var output_tile_data: ?*TileData = null;  
                     if(output_tile.has_tile_data()) {
-                        output_tile_data = game.get_tile_data(output_index);
+                        output_tile_data = get_tile_data(state, output_index);
                     }
 
                     // try and give from left and right storage last slot
@@ -1080,7 +812,7 @@ const Tile = enum(u8) {
                     if(last_left_slot.item) |item| {
 
                         if(last_left_slot.progress >= Tile.belt_max_progress) {
-                            if(output_tile.belt_give(item, tile_index, true, output_index, output_tile_data, game)) {
+                            if(output_tile.belt_give(item, tile_index, true, output_index, output_tile_data, state)) {
                                 belt.clear_last_left_slot(); 
                             }
                         }
@@ -1090,7 +822,7 @@ const Tile = enum(u8) {
                     if(last_right_slot.item) |item| {
 
                         if(last_right_slot.progress >= Tile.belt_max_progress) {
-                            if(output_tile.belt_give(item, tile_index, false, output_index, output_tile_data, game)) {
+                            if(output_tile.belt_give(item, tile_index, false, output_index, output_tile_data, state)) {
                                 belt.clear_last_right_slot(); 
                             }
                         }
@@ -1154,14 +886,14 @@ const Tile = enum(u8) {
                 // check to output items
                 check_output: {
                     const current_position = get_tile_position_from_tile_index(tile_index);
-                    const output_direction = game.forground_tiles[tile_index].direction.relative(pipe_merger.relative_output_direction);
+                    const output_direction = state.g.forground_tiles[tile_index].direction.relative(pipe_merger.relative_output_direction);
                     const output_position = current_position.get_adjacent_tile_at_direction(output_direction);
                     if(!output_position.is_valid()) {
                         break :check_output;
                     }
 
                     const output_index = output_position.get_tile_index();
-                    const output_tile = game.forground_tiles[output_index].tile;
+                    const output_tile = state.g.forground_tiles[output_index].tile;
                     
                     if(!output_tile.belt_can_give()) {
                         break :check_output;
@@ -1169,12 +901,12 @@ const Tile = enum(u8) {
 
                     var output_tile_data: ?*TileData = null;  
                     if(output_tile.has_tile_data()) {
-                        output_tile_data = game.get_tile_data(output_index);
+                        output_tile_data = get_tile_data(state, output_index);
                     }
 
                     for(&pipe_merger.storage) |*slot| {
                         if(slot.progress >= Tile.belt_max_progress) {
-                            if(output_tile.belt_give(slot.item.?, tile_index, false, output_index, output_tile_data, game)) {
+                            if(output_tile.belt_give(slot.item.?, tile_index, false, output_index, output_tile_data, state)) {
                                 slot.item = null;
                                 slot.progress = 0;
                             }        
@@ -1190,7 +922,7 @@ const Tile = enum(u8) {
                     return;
                 }
 
-                const input_direction = game.forground_tiles[tile_index].direction;
+                const input_direction = state.g.forground_tiles[tile_index].direction;
                 const output_direction = input_direction.oppisite();
 
                 // check to take item
@@ -1205,7 +937,7 @@ const Tile = enum(u8) {
                     }
 
                     const input_index = input_position.get_tile_index();
-                    const input_tile = game.forground_tiles[input_index].tile;
+                    const input_tile = state.g.forground_tiles[input_index].tile;
                     
                     if(!input_tile.extractor_can_take()) {
                         break :check_input;
@@ -1213,10 +945,10 @@ const Tile = enum(u8) {
 
                     var input_tile_data: ?*TileData = null;  
                     if(input_tile.has_tile_data()) {
-                        input_tile_data = game.get_tile_data(input_index);
+                        input_tile_data = get_tile_data(state, input_index);
                     }
 
-                    const input_item = input_tile.extractor_take(input_index, input_tile_data, game);
+                    const input_item = input_tile.extractor_take(input_index, input_tile_data, state);
                     extractor.item = input_item;
                 }
 
@@ -1231,21 +963,21 @@ const Tile = enum(u8) {
                     }
 
                     const output_index = output_position.get_tile_index();
-                    const output_tile = game.forground_tiles[output_index].tile;
+                    const output_tile = state.g.forground_tiles[output_index].tile;
                     
                     if(!output_tile.extractor_can_give()) {
                         break :check_output;
                     }
 
-                    if(output_tile.extractor_give(extractor.item.?, tile_index, output_index, game)) {
+                    if(output_tile.extractor_give(extractor.item.?, tile_index, output_index, state)) {
                         extractor.item = null;
                     }
                 }
             },
             .crusher => {
                 var crusher = &tile_data.?.data.crusher;
-                const node = game.get_network_node(tile_index);
-                var network = game.get_network(node.network_id);
+                const node = get_network_node(state, tile_index);
+                var network = get_network(state, node.network_id);
 
 
                 { // mining logic
@@ -1272,18 +1004,17 @@ const Tile = enum(u8) {
 
     // called before the regular tick update, returns the amount of power that this tile
     // is generating for the current tick (just after this one)
-    fn tick_network_generator_amount(self: Self, game: *const Game) usize {
-        _ = game; // autofix
+    fn tick_network_generator_amount(self: Self, state: *const State) usize {
+        _ = state; // autofix
         return switch (self) {
             .battery => 100,
             else => std.debug.panic("tried to get power generator amount from a non-generator\n", .{})
         };
     }
 
-
-    fn extractor_take(self: Self, tile_index: usize, tile_data: ?*TileData, game: *const Game) ?Item {
+    fn extractor_take(self: Self, tile_index: usize, tile_data: ?*TileData, state: *const State) ?Item {
         _ = tile_index; // autofix
-        _ = game; // autofix
+        _ = state; // autofix
         switch (self) {
             .miner => {
                 const miner = &tile_data.?.data.miner;
@@ -1320,10 +1051,10 @@ const Tile = enum(u8) {
         }
     }
 
-    fn extractor_give(self: Self, item: Item, from_index: usize, tile_index: usize, game: *const Game) bool {
+    fn extractor_give(self: Self, item: Item, from_index: usize, tile_index: usize, state: *const State) bool {
         switch (self) {
             .miner => {
-                const miner = &game.get_tile_data(tile_index).data.miner;
+                const miner = &get_tile_data(state, tile_index).data.miner;
 
                 if(!item.can_be_fuel() or miner.input.is_full()) {
                     return false;
@@ -1338,7 +1069,7 @@ const Tile = enum(u8) {
                 return false;
             },
             .furnace => {
-                const furnace = &game.get_tile_data(tile_index).data.furnace;
+                const furnace = &get_tile_data(state, tile_index).data.furnace;
 
                 if(item.can_be_fuel()) {
                     if(!furnace.fuel_input.is_full() and furnace.fuel_input.is_compatible(item)) {
@@ -1359,11 +1090,11 @@ const Tile = enum(u8) {
                 return false;
             },
             .belt => {
-                const belt = &game.get_tile_data(tile_index).data.belt;
+                const belt = &get_tile_data(state, tile_index).data.belt;
 
                 const current_position = get_tile_position_from_tile_index(tile_index);
                 const from_position = get_tile_position_from_tile_index(from_index);
-                const current_direction = game.forground_tiles[tile_index].direction;
+                const current_direction = state.g.forground_tiles[tile_index].direction;
 
                 const from_direction = current_position.get_direction_from_adjacent_tile(&from_position) orelse std.debug.panic("tried to input to a tile when not beside\n", .{});
                 const relative_direction = current_direction.get_relative_between_directions(from_direction);
@@ -1386,14 +1117,14 @@ const Tile = enum(u8) {
         }
     }
 
-    fn belt_give(self: Self, item: Item, from_index: usize, is_left_side: bool, tile_index: usize, tile_data: ?*TileData, game: *const Game) bool {
+    fn belt_give(self: Self, item: Item, from_index: usize, is_left_side: bool, tile_index: usize, tile_data: ?*TileData, state: *const State) bool {
         switch (self) {
             .belt => {
                 const belt = &tile_data.?.data.belt;
 
                 const current_position = get_tile_position_from_tile_index(tile_index);
                 const from_position = get_tile_position_from_tile_index(from_index);
-                const input_position = current_position.get_adjacent_tile_at_direction(game.forground_tiles[tile_index].direction);
+                const input_position = current_position.get_adjacent_tile_at_direction(state.g.forground_tiles[tile_index].direction);
 
                 // if the position that our input is facing is not the same as where the belt
                 // that is trying to give us input is then do not accept
@@ -1417,7 +1148,7 @@ const Tile = enum(u8) {
                 const pipe_merger = &tile_data.?.data.pipe_merger;
 
                 const current_position = get_tile_position_from_tile_index(tile_index);
-                const current_direction = game.forground_tiles[tile_index].direction;
+                const current_direction = state.g.forground_tiles[tile_index].direction;
 
                 const input_positions = [_]TilePosition{
                     current_position.get_adjacent_tile_at_direction(current_direction),
@@ -1449,7 +1180,6 @@ const Tile = enum(u8) {
                 unreachable;
             }
         }
-
     }
 
     fn get_default_tile_data(self: *const Self) TileData {
@@ -1722,117 +1452,6 @@ const Item = enum {
 };
 
 /////////////////////////////////////////////////////////////////////////////////
-///                         @inventory
-/////////////////////////////////////////////////////////////////////////////////
-const InventorySlot = struct {
-    const Self = @This();
-
-    item_type: ?Item,
-    count: usize,
-
-    // takes the given amount from the slot
-    // if there is not enough then the slot is
-    // emptied, the actual amount removed is 
-    // returned
-    fn take_amount(self: *Self, count: usize) usize {
-        const amount_taken = if(count > self.count) self.count else count;
-        self.count -= amount_taken;
-
-        if(self.count == 0) {
-            self.item_type = null;
-        }
-
-        return amount_taken;
-    }
-
-    // moves all items to another slot
-    // checks need to be done before this to
-    // make sure no items or lost
-    fn move_items_to(self: *Self, other: *Self) void {
-        if(self.item_type == null) {
-            return;
-        }
-
-        if(other.item_type != null and self.item_type != other.item_type) {
-            return;
-        }
-
-        other.item_type = self.item_type;
-
-        const max_to_add = max_item_stack - other.count;
-        other.count += self.take_amount(max_to_add);
-    }
-
-    fn move_half_items_to(self: *Self, other: *Self) void {
-        if(self.item_type == null) {
-            return;
-        }
-
-        if(other.item_type != null and self.item_type != other.item_type) {
-            return;
-        }
-
-        other.item_type = self.item_type;
-        const half_current = self.count / 2;
-        other.count += self.take_amount(half_current);
-    }
-
-    fn swap(self: *Self, other: *Self) void {
-        const other_copy = other.*;
-
-        other.item_type = self.item_type;
-        other.count = self.count;
-
-        self.item_type = other_copy.item_type;
-        self.count = other_copy.count;
-    }
-
-    fn clear(self: *Self) usize {
-        if(self.item_type == null) {
-            return 0;
-        }
-
-        const current_count = self.count;
-        self.item_type = null;
-        self.count = 0;
-
-        return current_count;
-    }
-
-    fn is_empty(self: *const Self) bool {
-        return self.item_type == null;
-    }
-
-    fn is_full(self: *const Self) bool {
-        return self.count == max_item_stack;
-    }
-
-    fn is_compatible(self: *const Self, item: Item) bool {
-        return self.item_type == null or self.item_type.? == item;
-    }
-};
-
-const BeltStorageSlot = struct {
-    const Self = @This();
-
-    item: ?Item,
-    progress: i64,
-
-    fn clear(self: *Self) void {
-        self.item = null;
-        self.progress = 0;
-    }
-
-    fn is_empty(self: *Self) bool {
-        return self.item == null;
-    }
-
-    fn is_complete(self: *Self) bool {
-        return self.progress >= Tile.belt_max_progress;
-    }
-};
-
-/////////////////////////////////////////////////////////////////////////////////
 ///                         @ui
 /////////////////////////////////////////////////////////////////////////////////
 const UIIInventorySlot = struct {
@@ -2032,13 +1651,122 @@ const UI = struct {
 };
 
 /////////////////////////////////////////////////////////////////////////////////
+///                         @inventory
+/////////////////////////////////////////////////////////////////////////////////
+const InventorySlot = struct {
+    const Self = @This();
+
+    item_type: ?Item,
+    count: usize,
+
+    // takes the given amount from the slot
+    // if there is not enough then the slot is
+    // emptied, the actual amount removed is 
+    // returned
+    fn take_amount(self: *Self, count: usize) usize {
+        const amount_taken = if(count > self.count) self.count else count;
+        self.count -= amount_taken;
+
+        if(self.count == 0) {
+            self.item_type = null;
+        }
+
+        return amount_taken;
+    }
+
+    // moves all items to another slot
+    // checks need to be done before this to
+    // make sure no items or lost
+    fn move_items_to(self: *Self, other: *Self) void {
+        if(self.item_type == null) {
+            return;
+        }
+
+        if(other.item_type != null and self.item_type != other.item_type) {
+            return;
+        }
+
+        other.item_type = self.item_type;
+
+        const max_to_add = max_item_stack - other.count;
+        other.count += self.take_amount(max_to_add);
+    }
+
+    fn move_half_items_to(self: *Self, other: *Self) void {
+        if(self.item_type == null) {
+            return;
+        }
+
+        if(other.item_type != null and self.item_type != other.item_type) {
+            return;
+        }
+
+        other.item_type = self.item_type;
+        const half_current = self.count / 2;
+        other.count += self.take_amount(half_current);
+    }
+
+    fn swap(self: *Self, other: *Self) void {
+        const other_copy = other.*;
+
+        other.item_type = self.item_type;
+        other.count = self.count;
+
+        self.item_type = other_copy.item_type;
+        self.count = other_copy.count;
+    }
+
+    fn clear(self: *Self) usize {
+        if(self.item_type == null) {
+            return 0;
+        }
+
+        const current_count = self.count;
+        self.item_type = null;
+        self.count = 0;
+
+        return current_count;
+    }
+
+    fn is_empty(self: *const Self) bool {
+        return self.item_type == null;
+    }
+
+    fn is_full(self: *const Self) bool {
+        return self.count == max_item_stack;
+    }
+
+    fn is_compatible(self: *const Self, item: Item) bool {
+        return self.item_type == null or self.item_type.? == item;
+    }
+};
+
+const BeltStorageSlot = struct {
+    const Self = @This();
+
+    item: ?Item,
+    progress: i64,
+
+    fn clear(self: *Self) void {
+        self.item = null;
+        self.progress = 0;
+    }
+
+    fn is_empty(self: *Self) bool {
+        return self.item == null;
+    }
+
+    fn is_complete(self: *Self) bool {
+        return self.progress >= Tile.belt_max_progress;
+    }
+};
+
+/////////////////////////////////////////////////////////////////////////////////
 ///                         @player
 /////////////////////////////////////////////////////////////////////////////////
 const Player = struct {
     const Self = @This();
 
-    x: f32,
-    y: f32,
     inventory:[player_inventory_size]InventorySlot,
     selected_item: usize,
     placement_dirction: Direction,
@@ -2180,1315 +1908,1119 @@ const Player = struct {
 };
 
 /////////////////////////////////////////////////////////////////////////////////
-///                         @game
+///                         @start
 /////////////////////////////////////////////////////////////////////////////////
-const Game = struct {
-    const Self = @This();
+pub fn start(state: *State) void {
+    generate_world(state);
+}
 
-    var extractor_give_left = true;
+/////////////////////////////////////////////////////////////////////////////////
+///                         @update
+/////////////////////////////////////////////////////////////////////////////////
+pub fn update(state: *State, delta_time: f32) void {
+    state.tick_timer += delta_time;
 
-    const Input = struct{
-        w: bool,
-        a: bool,
-        s: bool,
-        d: bool,
-        r: bool,
-        e: bool,
-        m: bool,
-        t: bool,
-        up_arrow: bool,
-        down_arrow: bool,
-        left_arrow: bool,
-        right_arrow: bool,
-        numbers: [9]bool, // we ignore 0
-        scroll: f32,
-        left_mouse: bool,
-        right_mouse: bool,
-        ctrl: bool,
-        left_shift: bool,
-    };
+    if(state.tick()) {
+        power_update(state);
+        tick_update(state);
+    }
 
-    seed: i32,
-    player: Player,
-    camera: raylib.Camera2D,
-    input: Input,
-    background_tiles: []Tile,
-    forground_tiles: []ForgroundTile,
-    tile_data: std.ArrayList(TileData),
-    networks: std.ArrayList(Network),
-    network_nodes: std.ArrayList(NetworkNode),
-    world_gen_noise: fastnoise.Noise(f32),
-    allocator: std.mem.Allocator,
-    scratch_space: std.heap.FixedBufferAllocator,
-    underlying_arena: *std.heap.ArenaAllocator,
-    max_scratch_space_usage: usize,
-    tick_timer: f32,
-    ui_state: UI,
+    // tick rate update
+    {
+        // also min tick speed
+        const tick_increment = 0.01;
 
-    // arena* is just used for getting memory usage,
-    // use the allocator field for actual allocation
-    fn init(arena: *std.heap.ArenaAllocator, allocator: std.mem.Allocator) !Game {
-        const background_tiles = try allocator.alloc(Tile, world_tile_height * world_tile_width);
-        const forground_tiles = try allocator.alloc(ForgroundTile, world_tile_height * world_tile_width);
-
-        for(0..background_tiles.len) |i| {
-            background_tiles[i] = .air;
-            forground_tiles[i] = .{.tile = .air, .direction = .down};
+        if(state.input.left_arrow) {
+            state.time_per_tick -= tick_increment;
+            std.debug.print("tick speed {d}\n", .{state.time_per_tick});
         }
- 
-        var game = Game{
-            .seed = 16,
-            .player = Player{
-                .x = @divFloor(world_tile_width * tile_width, 2),
-                .y = @divFloor(world_tile_height * tile_height, 2),
-                .inventory = std.mem.zeroes([player_inventory_size]InventorySlot),
-                .selected_item = 0,
-                .placement_dirction = .down,
-            },
-            .camera = .{
-                .target = .{.x = 0, .y = 0}, // gets set to player x and y before first frame rendered
-                .offset = .{.x = window_width() / 2, .y = window_height() / 2},
-                .rotation = 0,
-                .zoom = 3.5,
-            },
-            .input = std.mem.zeroes(Game.Input),
-            .background_tiles = background_tiles,
-            .forground_tiles = forground_tiles,
-            .tile_data = std.ArrayList(TileData).init(allocator),
-            .networks = std.ArrayList(Network).init(allocator),
-            .network_nodes = std.ArrayList(NetworkNode).init(allocator),
-            .world_gen_noise = fastnoise.Noise(f32) {
-                .seed = 1337,
-                .noise_type = .perlin,
-                .frequency = 0.38717738,
-                .gain = 0.01,
-                .fractal_type = .fbm,
-                .lacunarity = 0.40,
-                .cellular_distance = .euclidean,
-                .cellular_return = .distance2,
-                .cellular_jitter_mod = 0.88,
-                .octaves = 2
-            },
-            .allocator = allocator,
-            .scratch_space = undefined,
-            .underlying_arena = arena,
-            .max_scratch_space_usage = 0,
-            .tick_timer = 0,
-            .ui_state = UI.init(),
+
+        if(state.input.right_arrow) {
+            state.time_per_tick += tick_increment;
+            std.debug.print("tick speed {d}\n", .{state.time_per_tick});
+        }
+
+        if(state.time_per_tick < tick_increment) {
+            state.time_per_tick = tick_increment;
+        }
+    }
+
+    if(state.input.t) {
+        load_resources() catch |err| {
+            std.debug.panic("error when reloading textures during runtime: {}\n", .{err});
         };
-
-        // temp adding items to inventory 
-        game.player.inventory[0] = .{ .item_type = .miner, .count = 99 };
-        game.player.inventory[1] = .{ .item_type = .extractor, .count = 99 };
-        game.player.inventory[2] = .{ .item_type = .belt, .count = 99 };
-        game.player.inventory[3] = .{ .item_type = .pipe_merger, .count = 99 };
-        game.player.inventory[4] = .{ .item_type = .crusher, .count = 99 };
-        game.player.inventory[6] = .{ .item_type = .furnace, .count = 99 };
-        game.player.inventory[7] = .{ .item_type = .pole, .count = 99 };
-        game.player.inventory[8] = .{ .item_type = .battery, .count = 99 };
-
-        game.player.inventory[9] = .{ .item_type = .coal, .count = 99 };
-        game.player.inventory[10] = .{ .item_type = .coal, .count = 99 };
-        game.player.inventory[11] = .{ .item_type = .coal, .count = 99 };
-        game.player.inventory[12] = .{ .item_type = .iron, .count = 99 };
-        
-        return game;
     }
 
-    fn run(self: *Self) void {
-        var scratch_space: []u8 = self.allocator.alloc(u8, 1024 * 10) catch |err| switch (err) {
-            error.OutOfMemory => {
-                std.debug.panic("out of memory when allocating scratch space :[\n", .{});
-            }
-        };
-
-        self.scratch_space = std.heap.FixedBufferAllocator.init(scratch_space[0..]);
-
-        while (!raylib.WindowShouldClose()) {
-            self.get_input();
-            self.update(raylib.GetFrameTime());
-            self.draw();
-           
-            if(self.max_scratch_space_usage < self.scratch_space.end_index) {
-                self.max_scratch_space_usage = self.scratch_space.end_index;
-            }
-
-            self.scratch_space.reset();
-        }
-
-        raylib.CloseWindow();
+    // memory debug toggle
+    if(state.input.m) {
+        debug_memory_usage = !debug_memory_usage;
     }
 
-    /////////////////////////////////////////////////////////////////////////////////
-    ///                         @input
-    /////////////////////////////////////////////////////////////////////////////////
-    fn get_input(self: *Self) void {
-        self.input.w = raylib.IsKeyDown(raylib.KEY_W);
-        self.input.a = raylib.IsKeyDown(raylib.KEY_A);
-        self.input.s = raylib.IsKeyDown(raylib.KEY_S);
-        self.input.d = raylib.IsKeyDown(raylib.KEY_D);
-        self.input.r = raylib.IsKeyPressed(raylib.KEY_R);
-        self.input.e = raylib.IsKeyPressed(raylib.KEY_E);
-        self.input.m = raylib.IsKeyPressed(raylib.KEY_M);
-        self.input.t = raylib.IsKeyPressed(raylib.KEY_T);
-        self.input.up_arrow = raylib.IsKeyPressed(raylib.KEY_UP);
-        self.input.down_arrow = raylib.IsKeyPressed(raylib.KEY_DOWN);
-        self.input.left_arrow = raylib.IsKeyPressed(raylib.KEY_LEFT);
-        self.input.right_arrow = raylib.IsKeyPressed(raylib.KEY_RIGHT);
-        self.input.numbers[0] = raylib.IsKeyDown(raylib.KEY_ONE);
-        self.input.numbers[1] = raylib.IsKeyDown(raylib.KEY_TWO);
-        self.input.numbers[2] = raylib.IsKeyDown(raylib.KEY_THREE);
-        self.input.numbers[3] = raylib.IsKeyDown(raylib.KEY_FOUR);
-        self.input.numbers[4] = raylib.IsKeyDown(raylib.KEY_FIVE);
-        self.input.numbers[5] = raylib.IsKeyDown(raylib.KEY_SIX);
-        self.input.numbers[6] = raylib.IsKeyDown(raylib.KEY_SEVEN);
-        self.input.numbers[7] = raylib.IsKeyDown(raylib.KEY_EIGHT);
-        self.input.numbers[8] = raylib.IsKeyDown(raylib.KEY_NINE);
-        self.input.scroll = raylib.GetMouseWheelMoveV().y;
-        self.input.right_mouse = raylib.IsMouseButtonPressed(1);
-        self.input.left_mouse = raylib.IsMouseButtonPressed(0);
-        self.input.left_mouse = raylib.IsMouseButtonPressed(0);
-        self.input.ctrl = raylib.IsKeyDown(raylib.KEY_LEFT_CONTROL);
-        self.input.left_shift = raylib.IsKeyDown(raylib.KEY_LEFT_SHIFT);
+    // player update
+    if(state.input.w) {
+        state.g.camera.target.y -= player_speed * delta_time;
     }
 
-    fn power_update(self: *Self) void {
-        // reset power for this tick
-        for(self.networks.items) |*network| {
-            network.available_power = 0;
-        }
-
-        // add power to the network for this tick
-        for(self.network_nodes.items) |*node| {
-            const tile = self.forground_tiles[node.tile_index].tile;
-
-            if(!tile.is_network_generator()) {
-                continue;
-            }
-
-            var network = self.get_network(node.network_id);
-            network.available_power += tile.tick_network_generator_amount(self);
-        }
+    if(state.input.a) {
+        state.g.camera.target.x -= player_speed * delta_time;
     }
 
-    fn tick_update(self: *Self) void {
-        for(self.tile_data.items) |*tile_data| {
-            self.forground_tiles[tile_data.tile_index].tile.tick_update(tile_data.tile_index, tile_data, self);
-        }
+    if(state.input.s) {
+        state.g.camera.target.y += player_speed * delta_time;
     }
 
-    /////////////////////////////////////////////////////////////////////////////////
-    ///                         @update
-    /////////////////////////////////////////////////////////////////////////////////
-    fn update(self: *Self, delta_time: f32) void {
-        self.tick_timer += delta_time;
-        if(self.tick_timer >= time_per_tick) {
-            self.tick_timer = 0;
-            self.power_update();
-            self.tick_update();
-        }
+    if(state.input.d) {
+        state.g.camera.target.x += player_speed * delta_time;
+    }
 
-        // tick rate update
-        {
-            // also min tick speed
-            const tick_increment = 0.01;
-
-            if(self.input.left_arrow) {
-                time_per_tick -= tick_increment;
-                std.debug.print("tick speed {d}\n", .{time_per_tick});
-            }
-
-            if(self.input.right_arrow) {
-                time_per_tick += tick_increment;
-                std.debug.print("tick speed {d}\n", .{time_per_tick});
-            }
-
-            if(time_per_tick < tick_increment) {
-                time_per_tick = tick_increment;
-            }
-        }
-
-        if(self.input.t) {
-            load_resources() catch |err| {
-                std.debug.panic("error when reloading textures during runtime: {}\n", .{err});
-            };
-        }
-
-        // memory debug toggle
-        if(self.input.m) {
-            debug_memory_usage = !debug_memory_usage;
-        }
-
-        // player update
-        if(self.input.w) {
-            self.player.y -= player_speed * delta_time;
-        }
-
-        if(self.input.a) {
-            self.player.x -= player_speed * delta_time;
-        }
-
-        if(self.input.s) {
-            self.player.y += player_speed * delta_time;
-        }
-
-        if(self.input.d) {
-            self.player.x += player_speed * delta_time;
-        }
-
-        if(self.input.r) {
-            // only change direction if current slot is a tile
-            // that can be placed and can be rotated
-            const slot = self.player.get_selected_inventory_slot();
-            if(slot.item_type) |item| {
-                if(item.tile_when_placed()) |tile| {
-                    if(tile.has_direction()) {
-                        self.player.placement_dirction.next();
-                    }
+    if(state.input.r) {
+        // only change direction if current slot is a tile
+        // that can be placed and can be rotated
+        const slot = state.g.player.get_selected_inventory_slot();
+        if(slot.item_type) |item| {
+            if(item.tile_when_placed()) |tile| {
+                if(tile.has_direction()) {
+                    state.g.player.placement_dirction.next();
                 }
             }
         }
+    }
 
-        // inventory
-        for(0..self.input.numbers.len) |i| {
-            if(self.input.numbers[i]) {
-                self.player.selected_item = i;
-            }
+    // inventory
+    for(0..state.input.numbers.len) |i| {
+        if(state.input.numbers[i]) {
+            state.g.player.selected_item = i;
+        }
+    }
+
+    if(state.input.scroll > 0 and state.g.player.selected_item > 0 and !state.input.left_shift) {
+        state.g.player.selected_item -= 1;
+
+    } else if(state.input.scroll < 0 and state.g.player.selected_item < state.g.player.inventory.len - 1 and !state.input.left_shift) {
+        state.g.player.selected_item += 1;
+    }
+
+    // ui controls
+    if(state.input.e) {
+        close_inventory(state);
+    }
+
+    // camera update
+    const zoom_amount = 0.2;
+    if(state.input.up_arrow) {
+        state.g.camera.zoom += state.g.camera.zoom * zoom_amount;
+    }
+
+    if(state.input.down_arrow or (state.input.left_shift and state.input.scroll < 0)) {
+        state.g.camera.zoom -= state.g.camera.zoom * zoom_amount;
+        if(state.g.camera.zoom <= 0.4) state.g.camera.zoom = 0.4;
+    }
+
+    mouse_update: {
+        if(is_viewing_inventory(state)) {
+            break :mouse_update;
         }
 
-        if(self.input.scroll > 0 and self.player.selected_item > 0 and !self.input.left_shift) {
-            self.player.selected_item -= 1;
-            
-        } else if(self.input.scroll < 0 and self.player.selected_item < self.player.inventory.len - 1 and !self.input.left_shift) {
-            self.player.selected_item += 1;
+        const mouse_position = get_mouse_world_position(state);
+
+        if(!mouse_position.in_world_bounds()) {
+            break :mouse_update;
         }
 
-        // ui controls
-        if(self.input.e) {
-            self.close_inventory();
-        }
+        const tile_coords = mouse_position.to_tile_position();
+        const tile_index = tile_coords.get_tile_index();
 
-        // camera update
-        const zoom_amount = 0.2;
-        if(self.input.up_arrow) {
-            self.camera.zoom += self.camera.zoom * zoom_amount;
-        }
-
-        if(self.input.down_arrow or (self.input.left_shift and self.input.scroll < 0)) {
-            self.camera.zoom -= self.camera.zoom * zoom_amount;
-            if(self.camera.zoom <= 0.4) self.camera.zoom = 0.4;
-        }
-
-        self.camera.target.x = self.player.x;
-        self.camera.target.y = self.player.y; 
-
-        mouse_update: {
-            if(self.is_viewing_inventory()) {
+        if(state.input.right_mouse) {
+            if(state.g.forground_tiles[tile_index].tile != .air) {
+                open_inventory(state, tile_index);
                 break :mouse_update;
             }
 
-            const mouse_position = self.get_mouse_world_position();
-            
-            if(!mouse_position.in_world_bounds()) {
-                break :mouse_update;
-            }
-
-            const tile_coords = mouse_position.to_tile_position();
-            const tile_index = tile_coords.get_tile_index();
-
-            if(self.input.right_mouse) {
-                if(self.forground_tiles[tile_index].tile != .air) {
-                    self.open_inventory(tile_index);
-                    break :mouse_update;
-                }
-
-                const current_selected_item = self.player.get_selected_item_type();
-                if(current_selected_item != null) {
-                    const items_tile = current_selected_item.?.tile_when_placed();
-                    if(items_tile) |value| {
-                        // only pop the item from the inventory when it has an
-                        // associated tile type to place
-                        if(self.place_tile_in_foreground(tile_index, value)) {
-                            _ = self.player.try_pop_selected_item();
-                        }
-                    }
-                }
-            }
-    
-            if(self.input.left_mouse) {
-                const removed_tile = self.remove_tile_in_foreground(tile_index);
-    
-                if(removed_tile) |value| {
-                    if(value.item_when_broken()) |item| {
-                        // right now if the player has no space in the inventory
-                        // we just ignore it and the item vanishes of course
-                        // this is not ideal
-                        _ = self.player.add_item_to_inventory(item, 1);
+            const current_selected_item = state.g.player.get_selected_item_type();
+            if(current_selected_item != null) {
+                const items_tile = current_selected_item.?.tile_when_placed();
+                if(items_tile) |value| {
+                    // only pop the item from the inventory when it has an
+                    // associated tile type to place
+                    if(place_tile_in_foreground(state, tile_index, value)) {
+                        _ = state.g.player.try_pop_selected_item();
                     }
                 }
             }
         }
 
-        // interactive panels and inventory update
-        panels: {
-            const mouse_position = get_mouse_screen_position(); 
-            
-            // current inventory slot the player is hovering over
-            // and the associated tile data inventory slot
-            var target_slots: ?struct {ui_slot: *UIIInventorySlot, slot: *InventorySlot} = null;
+        if(state.input.left_mouse) {
+            const removed_tile = remove_tile_in_foreground(state, tile_index);
 
-            find_target_slot: {
-                for(&self.ui_state.player_panel, 0..) |*ui_slot, i| {
-                    if(ui_slot.mouse_over(mouse_position)) {
-                        const player_inventory_slot = &self.player.inventory[i];
+            if(removed_tile) |value| {
+                if(value.item_when_broken()) |item| {
+                    // right now if the player has no space in the inventory
+                    // we just ignore it and the item vanishes of course
+                    // this is not ideal
+                    _ = state.g.player.add_item_to_inventory(item, 1);
+                }
+            }
+        }
+    }
+
+    // interactive panels and inventory update
+    panels: {
+        const mouse_position = get_mouse_screen_position();
+
+        // current inventory slot the player is hovering over
+        // and the associated tile data inventory slot
+        var target_slots: ?struct {ui_slot: *UIIInventorySlot, slot: *InventorySlot} = null;
+
+        find_target_slot: {
+            for(&state.g.ui_state.player_panel, 0..) |*ui_slot, i| {
+                if(ui_slot.mouse_over(mouse_position)) {
+                    const player_inventory_slot = &state.g.player.inventory[i];
+                    target_slots = .{
+                        .ui_slot = &state.g.ui_state.player_panel[i],
+                        .slot = player_inventory_slot
+                    };
+
+                    break :find_target_slot;
+                }
+            }
+
+            switch (state.g.ui_state.current_open_panel) {
+                .empty => break :panels,
+                .miner_inventory => |*miner_inventory| {
+                    if(state.g.forground_tiles[miner_inventory.tile_index].tile != .miner) {
+                        close_inventory(state);
+                        break :panels;
+                    }
+
+                    const miner_tile_data = get_tile_data(state, miner_inventory.tile_index);
+
+                    if(miner_inventory.input_slot.mouse_over(mouse_position)) {
                         target_slots = .{
-                            .ui_slot = &self.ui_state.player_panel[i],
-                            .slot = player_inventory_slot
+                            .ui_slot = &miner_inventory.input_slot,
+                            .slot = &miner_tile_data.data.miner.input
                         };
 
                         break :find_target_slot;
-                    }             
+                    }
+
+                    if(miner_inventory.output_slot.mouse_over(mouse_position)) {
+                        target_slots = .{
+                            .ui_slot = &miner_inventory.output_slot,
+                            .slot = &miner_tile_data.data.miner.output
+                        };
+
+                        break :find_target_slot;
+                    }
+                },
+                .furnace_inventory => |*furnace_inventory| {
+                    if(state.g.forground_tiles[furnace_inventory.tile_index].tile != .furnace) {
+                        close_inventory(state);
+                        break :panels;
+                    }
+
+                    const furnace_tile_data = get_tile_data(state, furnace_inventory.tile_index);
+
+                    if(furnace_inventory.input_fuel_slot.mouse_over(mouse_position)) {
+                        target_slots = .{
+                            .ui_slot = &furnace_inventory.input_fuel_slot,
+                            .slot = &furnace_tile_data.data.furnace.fuel_input
+                        };
+
+                        break :find_target_slot;
+                    }
+
+                    if(furnace_inventory.input_ingredient_slot.mouse_over(mouse_position)) {
+                        target_slots = .{
+                            .ui_slot = &furnace_inventory.input_ingredient_slot,
+                            .slot = &furnace_tile_data.data.furnace.ingredient_input
+                        };
+
+                        break :find_target_slot;
+                    }
+
+                    if(furnace_inventory.output_slot.mouse_over(mouse_position)) {
+                        target_slots = .{
+                            .ui_slot = &furnace_inventory.output_slot,
+                            .slot = &furnace_tile_data.data.furnace.output
+                        };
+
+                        break :find_target_slot;
+                    }
+                },
+                .crusher_inventory => |*crusher_inventory| {
+                    if(state.g.forground_tiles[crusher_inventory.tile_index].tile != .crusher) {
+                        close_inventory(state);
+                        break :panels;
+                    }
+
+                    const crusher_tile_data = get_tile_data(state, crusher_inventory.tile_index);
+
+                    if(crusher_inventory.input_slot.mouse_over(mouse_position)) {
+                        target_slots = .{
+                            .ui_slot = &crusher_inventory.input_slot,
+                            .slot = &crusher_tile_data.data.crusher.input
+                        };
+
+                        break :find_target_slot;
+                    }
+
+                    if(crusher_inventory.output_slot.mouse_over(mouse_position)) {
+                        target_slots = .{
+                            .ui_slot = &crusher_inventory.output_slot,
+                            .slot = &crusher_tile_data.data.crusher.output
+                        };
+
+                        break :find_target_slot;
+                    }
+                },
+            }
+        }
+
+        if(target_slots == null) break :panels;
+
+        mouse_interaction: {
+            if(!(state.input.left_mouse or state.input.right_mouse)) {
+                break :mouse_interaction;
+            }
+
+            const in_hand = &state.g.ui_state.in_hand;
+            const target_ui_slot = target_slots.?.ui_slot;
+            const target_game_slot = target_slots.?.slot;
+
+            if(in_hand.is_empty()) {
+                if(state.input.left_mouse) {
+                    target_game_slot.move_items_to(in_hand);
+                } else if(state.input.right_mouse) {
+                    target_game_slot.move_half_items_to(in_hand);
                 }
 
-                switch (self.ui_state.current_open_panel) {
-                    .empty => break :panels,
-                    .miner_inventory => |*miner_inventory| {
-                        if(self.forground_tiles[miner_inventory.tile_index].tile != .miner) {
-                            self.close_inventory();
-                            break :panels;
-                        }
-
-                        const miner_tile_data = self.get_tile_data(miner_inventory.tile_index);
-
-                        if(miner_inventory.input_slot.mouse_over(mouse_position)) {
-                            target_slots = .{
-                                .ui_slot = &miner_inventory.input_slot,
-                                .slot = &miner_tile_data.data.miner.input
-                            };
-
-                            break :find_target_slot;
-                        }
-    
-                        if(miner_inventory.output_slot.mouse_over(mouse_position)) {
-                            target_slots = .{
-                                .ui_slot = &miner_inventory.output_slot,
-                                .slot = &miner_tile_data.data.miner.output
-                            };
-                            
-                            break :find_target_slot;
-                        }
-                    },
-                    .furnace_inventory => |*furnace_inventory| {
-                        if(self.forground_tiles[furnace_inventory.tile_index].tile != .furnace) {
-                            self.close_inventory();
-                            break :panels;
-                        }
-
-                        const furnace_tile_data = self.get_tile_data(furnace_inventory.tile_index);
-
-                        if(furnace_inventory.input_fuel_slot.mouse_over(mouse_position)) {
-                            target_slots = .{
-                                .ui_slot = &furnace_inventory.input_fuel_slot,
-                                .slot = &furnace_tile_data.data.furnace.fuel_input
-                            };
-
-                            break :find_target_slot;
-                        }
-
-                        if(furnace_inventory.input_ingredient_slot.mouse_over(mouse_position)) {
-                            target_slots = .{
-                                .ui_slot = &furnace_inventory.input_ingredient_slot,
-                                .slot = &furnace_tile_data.data.furnace.ingredient_input
-                            };
-
-                            break :find_target_slot;
-                        }
-    
-                        if(furnace_inventory.output_slot.mouse_over(mouse_position)) {
-                            target_slots = .{
-                                .ui_slot = &furnace_inventory.output_slot,
-                                .slot = &furnace_tile_data.data.furnace.output
-                            };
-                            
-                            break :find_target_slot;
-                        }
-                    },
-                    .crusher_inventory => |*crusher_inventory| {
-                        if(self.forground_tiles[crusher_inventory.tile_index].tile != .crusher) {
-                            self.close_inventory();
-                            break :panels;
-                        }
-
-                        const crusher_tile_data = self.get_tile_data(crusher_inventory.tile_index);
-
-                        if(crusher_inventory.input_slot.mouse_over(mouse_position)) {
-                            target_slots = .{
-                                .ui_slot = &crusher_inventory.input_slot,
-                                .slot = &crusher_tile_data.data.crusher.input
-                            };
-
-                            break :find_target_slot;
-                        }
-    
-                        if(crusher_inventory.output_slot.mouse_over(mouse_position)) {
-                            target_slots = .{
-                                .ui_slot = &crusher_inventory.output_slot,
-                                .slot = &crusher_tile_data.data.crusher.output
-                            };
-                            
-                            break :find_target_slot;
-                        }
-                    },
-                }
-            } 
-
-            if(target_slots == null) break :panels;
-
-            mouse_interaction: {
-                if(!(self.input.left_mouse or self.input.right_mouse)) {
+            } else {
+                if(target_ui_slot.has_flag(UIIInventorySlot.only_take_flag)) {
                     break :mouse_interaction;
                 }
 
-                const in_hand = &self.ui_state.in_hand;
-                const target_ui_slot = target_slots.?.ui_slot;
-                const target_game_slot = target_slots.?.slot;
+                if(target_ui_slot.has_flag(UIIInventorySlot.only_smeltable_flag) and !in_hand.item_type.?.can_be_smelted()) {
+                    break :mouse_interaction;
+                }
 
-                if(in_hand.is_empty()) {
-                    if(self.input.left_mouse) {
-                        target_game_slot.move_items_to(in_hand);
-                    } else if(self.input.right_mouse) {
-                        target_game_slot.move_half_items_to(in_hand);
-                    }
+                if(target_ui_slot.has_flag(UIIInventorySlot.only_fuel_flag) and !in_hand.item_type.?.can_be_fuel()) {
+                    break :mouse_interaction;
+                }
 
-                } else {
-                    if(target_ui_slot.has_flag(UIIInventorySlot.only_take_flag)) {
-                        break :mouse_interaction;
-                    }
+                if(target_ui_slot.has_flag(UIIInventorySlot.only_placeable_flag) and !in_hand.item_type.?.can_be_placed()) {
+                    break :mouse_interaction;
+                }
 
-                    if(target_ui_slot.has_flag(UIIInventorySlot.only_smeltable_flag) and !in_hand.item_type.?.can_be_smelted()) {
-                        break :mouse_interaction;
-                    }
+                if(target_ui_slot.has_flag(UIIInventorySlot.only_crushable_flag) and !in_hand.item_type.?.can_be_crushed()) {
+                    break :mouse_interaction;
+                }
 
-                    if(target_ui_slot.has_flag(UIIInventorySlot.only_fuel_flag) and !in_hand.item_type.?.can_be_fuel()) {
-                        break :mouse_interaction;
-                    }
+                if(state.input.left_mouse) {
+                    if(!target_game_slot.is_empty()) {
 
-                    if(target_ui_slot.has_flag(UIIInventorySlot.only_placeable_flag) and !in_hand.item_type.?.can_be_placed()) {
-                        break :mouse_interaction;
-                    }
-
-                    if(target_ui_slot.has_flag(UIIInventorySlot.only_crushable_flag) and !in_hand.item_type.?.can_be_crushed()) {
-                        break :mouse_interaction;
-                    }
-
-                    if(self.input.left_mouse) {
-                        if(!target_game_slot.is_empty()) {
-
-                            if(target_game_slot.item_type == in_hand.item_type) {
-                                in_hand.move_items_to(target_game_slot);
-                            } else {
-                                in_hand.swap(target_game_slot);
-                            }
-                        } else {
+                        if(target_game_slot.item_type == in_hand.item_type) {
                             in_hand.move_items_to(target_game_slot);
+                        } else {
+                            in_hand.swap(target_game_slot);
                         }
-                    } 
+                    } else {
+                        in_hand.move_items_to(target_game_slot);
+                    }
                 }
             }
         }
     }
+}
 
-    /////////////////////////////////////////////////////////////////////////////////
-    ///                         @draw
-    /////////////////////////////////////////////////////////////////////////////////
-    fn draw(self: *Self) void {
-        raylib.BeginDrawing();
-        raylib.ClearBackground(raylib.PURPLE);
-        raylib.BeginMode2D(self.camera);
+fn power_update(state: *State) void {
+    // reset power for this tick
+    for(state.g.networks.items) |*network| {
+        network.available_power = 0;
+    }
 
-        // background tiles
-        for(0..self.background_tiles.len) |i| {
-            const tile_coords = get_tile_position_from_tile_index(i);
-            const world_position = tile_coords.to_world_position();
+    // add power to the network for this tick
+    for(state.g.network_nodes.items) |*node| {
+        const tile = state.g.forground_tiles[node.tile_index].tile;
 
-            const texture = self.background_tiles[i].get_default_texture();
-            draw_texture(texture, world_position.x, world_position.y, tile_width, tile_height);
+        if(!tile.is_network_generator()) {
+            continue;
         }
 
-        // foreground tiles
-        for(0..self.forground_tiles.len) |i| {
-            const tile_position = get_tile_position_from_tile_index(i);
-            const world_position = tile_position.to_world_position();
-            
-            const forground_tile = self.forground_tiles[i];
-            if(forground_tile.tile == .air) {
-                continue;
-            }
+        var network = get_network(state, node.network_id);
+        network.available_power += tile.tick_network_generator_amount(state);
+    }
+}
 
-            const texture = forground_tile.tile.get_texture(i, self);
-                
-            // update draw location based on the rotation
-            // this is because textures are drawn from the 
-            // top left corner
-            var rotated_position = world_position;
-            if(forground_tile.tile.has_direction()) {
-                rotated_position = move_draw_location_on_direction(world_position, forground_tile.direction);
-            }
+fn tick_update(state: *State) void {
+    for(state.g.tile_data.items) |*tile_data| {
+        state.g.forground_tiles[tile_data.tile_index].tile.tick_update(tile_data.tile_index, tile_data, state);
+    }
+}
 
-            draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
+/////////////////////////////////////////////////////////////////////////////////
+///                         @draw
+/////////////////////////////////////////////////////////////////////////////////
+pub fn draw(state: *State) void {
+    raylib.BeginDrawing();
+    raylib.ClearBackground(raylib.PURPLE);
+    raylib.BeginMode2D(state.g.camera);
 
-            special_belt_render: {
-                if(forground_tile.tile == .belt) {
-                    const icon_size = 6;
+    // background tiles
+    for(0..state.g.background_tiles.len) |i| {
+        const tile_coords = get_tile_position_from_tile_index(i);
+        const world_position = tile_coords.to_world_position();
 
-                    const belt = &self.get_tile_data(i).data.belt;
-    
-                    if(false) {
-                        break :special_belt_render;
-                    } 
+        const texture = state.g.background_tiles[i].get_default_texture();
+        draw_texture(texture, world_position.x, world_position.y, tile_width, tile_height);
+    }
 
-                    const left_spline_to_use = get_belt_spline(
-                        belt.relative_output_direction == Direction.up, 
-                        true, 
-                        forground_tile.direction, 
-                        belt.relative_output_direction
-                    );
+    // foreground tiles
+    for(0..state.g.forground_tiles.len) |i| {
+        const tile_position = get_tile_position_from_tile_index(i);
+        const world_position = tile_position.to_world_position();
 
-                    const right_spline_to_use = get_belt_spline(
-                        belt.relative_output_direction == Direction.up, 
-                        false, 
-                        forground_tile.direction, 
-                        belt.relative_output_direction
-                    );
-    
-                    for(&belt.left_storage, 0..) |*slot, slot_index| {
-                        if(slot.item == null) {
-                            continue;
-                        }
+        const forground_tile = state.g.forground_tiles[i];
+        if(forground_tile.tile == .air) {
+            continue;
+        }
 
-                        const spline_point = left_spline_to_use.buffer[slot_index];
-                        const draw_position = WorldPosition{
-                            .x = world_position.x + (spline_point.x * tile_width),
-                            .y = world_position.y + (spline_point.y * tile_width),
-                        };
+        const texture = forground_tile.tile.get_texture(i, state);
 
-                        const item_texture = slot.item.?.get_texture();
-                        draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
-                    }
+        // update draw location based on the rotation
+        // this is because textures are drawn from the
+        // top left corner
+        var rotated_position = world_position;
+        if(forground_tile.tile.has_direction()) {
+            rotated_position = move_draw_location_on_direction(world_position, forground_tile.direction);
+        }
 
-                    for(&belt.right_storage, 0..) |*slot, slot_index| {
-                        if(slot.item == null) {
-                            continue;
-                        }
+        draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
 
-                        const spline_point = right_spline_to_use.buffer[slot_index];
-                        const draw_position = WorldPosition{
-                            .x = world_position.x + (spline_point.x * tile_width),
-                            .y = world_position.y + (spline_point.y * tile_width),
-                        };
+        special_belt_render: {
+            if(forground_tile.tile == .belt) {
+                const icon_size = 6;
 
-                        const item_texture = slot.item.?.get_texture();
-                        draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
-                    }
+                const belt = &get_tile_data(state, i).data.belt;
+
+                if(false) {
+                    break :special_belt_render;
                 }
-            }
 
-            if(debug_networks) {
-                if(forground_tile.tile.is_network_node()) {
-                    const node = self.get_network_node(i);
-                    
-                    const id_string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "{}", .{node.network_id}) catch unreachable;
-                    draw_text(id_string, world_position.x, world_position.y, 10, raylib.GREEN);
+                const left_spline_to_use = get_belt_spline(
+                    belt.relative_output_direction == Direction.up,
+                    true,
+                    forground_tile.direction,
+                    belt.relative_output_direction
+                );
 
-                    const connections_string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "{}", .{node.neighbour_tile_indices.slice().len}) catch unreachable;
-                    draw_text(connections_string, world_position.x, world_position.y + 10, 10, raylib.BLUE);
+                const right_spline_to_use = get_belt_spline(
+                    belt.relative_output_direction == Direction.up,
+                    false,
+                    forground_tile.direction,
+                    belt.relative_output_direction
+                );
+
+                for(&belt.left_storage, 0..) |*slot, slot_index| {
+                    if(slot.item == null) {
+                        continue;
+                    }
+
+                    const spline_point = left_spline_to_use.buffer[slot_index];
+                    const draw_position = WorldPosition{
+                        .x = world_position.x + (spline_point.x * tile_width),
+                        .y = world_position.y + (spline_point.y * tile_width),
+                    };
+
+                    const item_texture = slot.item.?.get_texture();
+                    draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
+                }
+
+                for(&belt.right_storage, 0..) |*slot, slot_index| {
+                    if(slot.item == null) {
+                        continue;
+                    }
+
+                    const spline_point = right_spline_to_use.buffer[slot_index];
+                    const draw_position = WorldPosition{
+                        .x = world_position.x + (spline_point.x * tile_width),
+                        .y = world_position.y + (spline_point.y * tile_width),
+                    };
+
+                    const item_texture = slot.item.?.get_texture();
+                    draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
                 }
             }
         }
 
-        // network connections debug
         if(debug_networks) {
-            for(self.network_nodes.items) |*node| {
-                const node_world_position = get_tile_position_from_tile_index(node.tile_index).to_world_position();
-                for(node.neighbour_tile_indices.slice()) |neighbour_tile_index| {
-                    const neighbour_world_position = get_tile_position_from_tile_index(neighbour_tile_index).to_world_position();
-                    draw_line(node_world_position.x, node_world_position.y, neighbour_world_position.x, neighbour_world_position.y, 1, raylib.RED);
-                }
+            if(forground_tile.tile.is_network_node()) {
+                const node = get_network_node(state, i);
+
+                const id_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{node.network_id}) catch unreachable;
+                draw_text(id_string, world_position.x, world_position.y, 10, raylib.GREEN);
+
+                const connections_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{node.neighbour_tile_indices.slice().len}) catch unreachable;
+                draw_text(connections_string, world_position.x, world_position.y + 10, 10, raylib.BLUE);
             }
         }
+    }
 
-        // tile place preview
-        tile_preview: {
-            if(self.is_viewing_inventory()) {
-                break :tile_preview;
-            }
-
-            const mouse_world_position = self.get_mouse_world_position();
-            if(!mouse_world_position.in_world_bounds()) {
-                break :tile_preview;
-            }
-
-            const tile_position = mouse_world_position.to_tile_position();
-            const tile_index = tile_position.get_tile_index();
-
-            if(self.forground_tiles[tile_index].tile != .air) {
-                break :tile_preview;
-            }
-            
-            var world_position = tile_position.to_world_position();
-
-            const selected_slot = self.player.get_selected_inventory_slot();
-            if(selected_slot.item_type) |item| {
-                if(item.tile_when_placed()) |tile|  {
-                    if(tile.has_direction()) {
-                        world_position = move_draw_location_on_direction(world_position, self.player.placement_dirction);
-                    }
-
-                    const direction = if(tile.has_direction()) self.player.placement_dirction else .down;
-
-                    draw_texture_pro(tile.get_default_texture(), world_position.x, world_position.y, tile_width, tile_height, direction.get_rotation(), raylib.Fade(raylib.WHITE, 0.6), false);
-                }
+    // network connections debug
+    if(debug_networks) {
+        for(state.g.network_nodes.items) |*node| {
+            const node_world_position = get_tile_position_from_tile_index(node.tile_index).to_world_position();
+            for(node.neighbour_tile_indices.slice()) |neighbour_tile_index| {
+                const neighbour_world_position = get_tile_position_from_tile_index(neighbour_tile_index).to_world_position();
+                draw_line(node_world_position.x, node_world_position.y, neighbour_world_position.x, neighbour_world_position.y, 1, raylib.RED);
             }
         }
+    }
 
-        // end 2d mode so ui is not in world space
-        raylib.EndMode2D();
+    // tile place preview
+    tile_preview: {
+        if(is_viewing_inventory(state)) {
+            break :tile_preview;
+        }
 
-        // ui panels and inventory drawing
-        game_ui_drawing: {
-            const mouse_screen_position = get_mouse_screen_position();
+        const mouse_world_position = get_mouse_world_position(state);
+        if(!mouse_world_position.in_world_bounds()) {
+            break :tile_preview;
+        }
 
-            // draw current open panel
-            switch (self.ui_state.current_open_panel) {
-                .empty => {
+        const tile_position = mouse_world_position.to_tile_position();
+        const tile_index = tile_position.get_tile_index();
+
+        if(state.g.forground_tiles[tile_index].tile != .air) {
+            break :tile_preview;
+        }
+
+        var world_position = tile_position.to_world_position();
+
+        const selected_slot = state.g.player.get_selected_inventory_slot();
+        if(selected_slot.item_type) |item| {
+            if(item.tile_when_placed()) |tile|  {
+                if(tile.has_direction()) {
+                    world_position = move_draw_location_on_direction(world_position, state.g.player.placement_dirction);
+                }
+
+                const direction = if(tile.has_direction()) state.g.player.placement_dirction else .down;
+
+                draw_texture_pro(tile.get_default_texture(), world_position.x, world_position.y, tile_width, tile_height, direction.get_rotation(), raylib.Fade(raylib.WHITE, 0.6), false);
+            }
+        }
+    }
+
+    // end 2d mode so ui is not in world space
+    raylib.EndMode2D();
+
+    // ui panels and inventory drawing
+    game_ui_drawing: {
+        const mouse_screen_position = get_mouse_screen_position();
+
+        // draw current open panel
+        switch (state.g.ui_state.current_open_panel) {
+            .empty => {
+                break :game_ui_drawing;
+            },
+            .miner_inventory => |*miner_ui| {
+                const background_height = 300;
+                const background_width = 400;
+
+                draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.BLACK, false);
+
+                if(state.g.forground_tiles[miner_ui.tile_index].tile != .miner) {
+                    close_inventory(state);
                     break :game_ui_drawing;
-                },
-                .miner_inventory => |*miner_ui| {
-                    const background_height = 300;
-                    const background_width = 400;
-
-                    draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.BLACK, false);
-    
-                    if(self.forground_tiles[miner_ui.tile_index].tile != .miner) {
-                        self.close_inventory();
-                        break :game_ui_drawing;
-                    }
-    
-                    const miner = &self.get_tile_data(miner_ui.tile_index).data.miner;
-
-                    const progress_bar_width = 5;
-                    const fuel_progress_bar_x = miner_ui.input_slot.x - 10 - progress_bar_width;
-                    const fuel_progress_bar_y = miner_ui.input_slot.y;
-
-                    if(miner.fuel_item_in_use) |fuel_item| {
-                        draw_progress_bar_vertical(fuel_progress_bar_x, fuel_progress_bar_y, 10, miner_ui.input_slot.size, raylib.RED, raylib.ORANGE, miner.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.miner_max_progress);
-                    }
-
-                    const output_progress_bar_x = miner_ui.output_slot.x - 10 - progress_bar_width;
-                    const output_progress_bar_y = miner_ui.output_slot.y;
-                    draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, miner_ui.output_slot.size, raylib.BLUE, raylib.WHITE, miner.progress, Tile.miner_max_progress);
-    
-                    miner_ui.input_slot.draw(&miner.input, raylib.BLUE, self.scratch_space.allocator());
-                    miner_ui.output_slot.draw(&miner.output, raylib.RED, self.scratch_space.allocator());
-                },
-                .furnace_inventory => |*furnace_ui| {
-                    draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.ORANGE, true);
-    
-                    if(self.forground_tiles[furnace_ui.tile_index].tile != .furnace) {
-                        self.close_inventory();
-                        break :game_ui_drawing;
-                    }
-    
-                    const furnace = &self.get_tile_data(furnace_ui.tile_index).data.furnace;
-                    
-                    const progress_bar_width = 5;
-
-                    const fuel_progress_bar_x = furnace_ui.input_fuel_slot.x - 10 - progress_bar_width;
-                    const fuel_progress_bar_y = furnace_ui.input_fuel_slot.y;
-
-                    if(furnace.fuel_item_in_use) |fuel_item| {
-                        draw_progress_bar_vertical(fuel_progress_bar_x, fuel_progress_bar_y, 10, furnace_ui.input_fuel_slot.size, raylib.RED, raylib.ORANGE, furnace.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.furnace_max_progress);
-                    }
-
-                    const output_progress_bar_x = furnace_ui.output_slot.x - 10 - progress_bar_width;
-                    const output_progress_bar_y = furnace_ui.output_slot.y;
-
-                    draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, furnace_ui.output_slot.size, raylib.BLUE, raylib.WHITE, furnace.progress, Tile.furnace_max_progress);
-
-                    furnace_ui.input_ingredient_slot.draw(&furnace.ingredient_input, raylib.BLUE, self.scratch_space.allocator());
-                    furnace_ui.input_fuel_slot.draw(&furnace.fuel_input, raylib.BLUE, self.scratch_space.allocator());
-                    furnace_ui.output_slot.draw(&furnace.output, raylib.RED, self.scratch_space.allocator());
-                },
-                .crusher_inventory => |*crusher_ui| {
-                    const background_height = 300;
-                    const background_width = 400;
-
-                    draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.WHITE, false);
-    
-                    if(self.forground_tiles[crusher_ui.tile_index].tile != .crusher) {
-                        self.close_inventory();
-                        break :game_ui_drawing;
-                    }
-    
-                    const crusher = &self.get_tile_data(crusher_ui.tile_index).data.crusher;
-
-                    crusher_ui.input_slot.draw(&crusher.input, raylib.BLUE, self.scratch_space.allocator());
-                    crusher_ui.output_slot.draw(&crusher.output, raylib.RED, self.scratch_space.allocator());
-                },
-            }
-
-            // draw player inventory
-            for(&self.ui_state.player_panel, 0..) |*ui_slot, i| {
-                const color = switch (i) {
-                    0 => raylib.RED,
-                    1 => raylib.ORANGE,
-                    2 => raylib.YELLOW,
-                    3 => raylib.GREEN,
-                    4 => raylib.SKYBLUE,
-                    5 => raylib.BLUE,
-                    6 => raylib.VIOLET,
-                    7 => raylib.BROWN,
-                    8 => raylib.BLACK,
-                    else => raylib.WHITE
-                };
-
-                ui_slot.draw(&self.player.inventory[i], color, self.scratch_space.allocator());
-            }
-
-            // draw item in hand
-            if(self.ui_state.in_hand.item_type) |item| {                     
-                const item_texture = item.get_texture();
-                const icon_x = mouse_screen_position.x + 10;
-                const icon_y = mouse_screen_position.y + 10;
-
-                draw_texture(item_texture, icon_x, icon_y, 50, 50);
-                
-                // max size is 99 so 2 bytes is fine here
-                const string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "{}", .{self.ui_state.in_hand.count}) catch unreachable;
-                draw_text(string, icon_x, icon_y, 20, raylib.WHITE);
-            }
-        }
-        
-        // fps text 
-        {
-            const fps_string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "fps: {}", .{raylib.GetFPS()}) catch unreachable;
-            draw_text(fps_string, window_width() - 100, window_height() - 20, 20, raylib.WHITE);
-        }
-
-        // memory debug info
-        if(debug_memory_usage) {
-            const arena_string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "A: {}", .{self.underlying_arena.queryCapacity()}) catch unreachable;
-            draw_text(arena_string, window_width() - 100, 20, 20, raylib.PURPLE);
-
-            const scratch_string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "S: {}", .{self.scratch_space.end_index}) catch unreachable;
-            draw_text(scratch_string, window_width() - 100, 40, 20, raylib.PURPLE);
-
-            const max_scratch_string = std.fmt.allocPrintZ(self.scratch_space.allocator(), "MS: {}", .{self.max_scratch_space_usage}) catch unreachable;
-            draw_text(max_scratch_string, window_width() - 100, 60, 20, raylib.PURPLE);
-        }
-
-        // inventory
-        {
-            const size = 50;
-            const padding = 5;
-            const slot_y = window_height() - size - padding;
-
-            for(0..9) |i| {
-
-                var color = switch (i) {
-                    0 => raylib.RED,
-                    1 => raylib.ORANGE,
-                    2 => raylib.YELLOW,
-                    3 => raylib.GREEN,
-                    4 => raylib.SKYBLUE,
-                    5 => raylib.BLUE,
-                    6 => raylib.VIOLET,
-                    7 => raylib.BROWN,
-                    8 => raylib.BLACK,
-                    else => unreachable
-                };
-
-                color = raylib.Fade(color, 0.7);
-
-                // adding the i * padding gives the gap
-                const slot_x: f32 = @floatFromInt((size * i) + (i * padding) + padding);
-                draw_inventory_slot(&self.player.inventory[i], slot_x, slot_y, size, color, self.scratch_space.allocator());
-
-                // draw item selected indicator
-                if(i == self.player.selected_item) {
-                    const indicator_radius = 5;
-                    const indicator_y = slot_y - 10;
-                    const indicator_x = slot_x + (size * 0.5);
-
-                    draw_circle(indicator_x, indicator_y, indicator_radius, raylib.YELLOW);
                 }
-            }
-        }
 
-        // crafting ui
-        {
-            const padding = 5;
-            const output_icon_size = 50;
+                const miner = &get_tile_data(state, miner_ui.tile_index).data.miner;
 
-            const mouse_screen_position = get_mouse_screen_position();
+                const progress_bar_width = 5;
+                const fuel_progress_bar_x = miner_ui.input_slot.x - 10 - progress_bar_width;
+                const fuel_progress_bar_y = miner_ui.input_slot.y;
 
-            for(&crafting_recipes, 0..) |*recipe, _i| {
-                const craftable = self.player.can_craft_recipe(recipe);
-                const color = if(craftable) raylib.Fade(raylib.GREEN, 0.7) else raylib.Fade(raylib.RED, 0.7);
-
-                const i = @as(f32, @floatFromInt(_i));
-                const output_icon_x = padding;
-                const output_icon_y = padding + (output_icon_size * i) + (padding * i);
-
-                draw_crafting_recipe_output(recipe, output_icon_x, output_icon_y, output_icon_size, color);
-
-                if(mouse_screen_position.x >= output_icon_x and mouse_screen_position.x <= output_icon_x + output_icon_size) {
-                    if(mouse_screen_position.y >= output_icon_y and mouse_screen_position.y <= output_icon_y + output_icon_size) {
-                        draw_crafting_recipe_input(recipe, mouse_screen_position.x + 15, mouse_screen_position.y, output_icon_size);
-
-                        if(craftable and self.input.left_mouse) {
-                            self.player.craft_recipe(recipe);
-                        }
-                    }
+                if(miner.fuel_item_in_use) |fuel_item| {
+                    draw_progress_bar_vertical(fuel_progress_bar_x, fuel_progress_bar_y, 10, miner_ui.input_slot.size, raylib.RED, raylib.ORANGE, miner.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.miner_max_progress);
                 }
-            }
+
+                const output_progress_bar_x = miner_ui.output_slot.x - 10 - progress_bar_width;
+                const output_progress_bar_y = miner_ui.output_slot.y;
+                draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, miner_ui.output_slot.size, raylib.BLUE, raylib.WHITE, miner.progress, Tile.miner_max_progress);
+
+                miner_ui.input_slot.draw(&miner.input, raylib.BLUE, state.scratch_space.allocator());
+                miner_ui.output_slot.draw(&miner.output, raylib.RED, state.scratch_space.allocator());
+            },
+            .furnace_inventory => |*furnace_ui| {
+                draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.ORANGE, true);
+
+                if(state.g.forground_tiles[furnace_ui.tile_index].tile != .furnace) {
+                    close_inventory(state);
+                    break :game_ui_drawing;
+                }
+
+                const furnace = &get_tile_data(state, furnace_ui.tile_index).data.furnace;
+
+                const progress_bar_width = 5;
+
+                const fuel_progress_bar_x = furnace_ui.input_fuel_slot.x - 10 - progress_bar_width;
+                const fuel_progress_bar_y = furnace_ui.input_fuel_slot.y;
+
+                if(furnace.fuel_item_in_use) |fuel_item| {
+                    draw_progress_bar_vertical(fuel_progress_bar_x, fuel_progress_bar_y, 10, furnace_ui.input_fuel_slot.size, raylib.RED, raylib.ORANGE, furnace.fuel_buffer, fuel_item.fuel_smelt_count().? * Tile.furnace_max_progress);
+                }
+
+                const output_progress_bar_x = furnace_ui.output_slot.x - 10 - progress_bar_width;
+                const output_progress_bar_y = furnace_ui.output_slot.y;
+
+                draw_progress_bar_vertical(output_progress_bar_x, output_progress_bar_y, 10, furnace_ui.output_slot.size, raylib.BLUE, raylib.WHITE, furnace.progress, Tile.furnace_max_progress);
+
+                furnace_ui.input_ingredient_slot.draw(&furnace.ingredient_input, raylib.BLUE, state.scratch_space.allocator());
+                furnace_ui.input_fuel_slot.draw(&furnace.fuel_input, raylib.BLUE, state.scratch_space.allocator());
+                furnace_ui.output_slot.draw(&furnace.output, raylib.RED, state.scratch_space.allocator());
+            },
+            .crusher_inventory => |*crusher_ui| {
+                const background_height = 300;
+                const background_width = 400;
+
+                draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.WHITE, false);
+
+                if(state.g.forground_tiles[crusher_ui.tile_index].tile != .crusher) {
+                    close_inventory(state);
+                    break :game_ui_drawing;
+                }
+
+                const crusher = &get_tile_data(state, crusher_ui.tile_index).data.crusher;
+
+                crusher_ui.input_slot.draw(&crusher.input, raylib.BLUE, state.scratch_space.allocator());
+                crusher_ui.output_slot.draw(&crusher.output, raylib.RED, state.scratch_space.allocator());
+            },
         }
 
-        raylib.EndDrawing();
+        // draw player inventory
+        for(&state.g.ui_state.player_panel, 0..) |*ui_slot, i| {
+            const color = switch (i) {
+                0 => raylib.RED,
+                1 => raylib.ORANGE,
+                2 => raylib.YELLOW,
+                3 => raylib.GREEN,
+                4 => raylib.SKYBLUE,
+                5 => raylib.BLUE,
+                6 => raylib.VIOLET,
+                7 => raylib.BROWN,
+                8 => raylib.BLACK,
+                else => raylib.WHITE
+            };
+
+            ui_slot.draw(&state.g.player.inventory[i], color, state.scratch_space.allocator());
+        }
+
+        // draw item in hand
+        if(state.g.ui_state.in_hand.item_type) |item| {
+            const item_texture = item.get_texture();
+            const icon_x = mouse_screen_position.x + 10;
+            const icon_y = mouse_screen_position.y + 10;
+
+            draw_texture(item_texture, icon_x, icon_y, 50, 50);
+
+            // max size is 99 so 2 bytes is fine here
+            const string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{state.g.ui_state.in_hand.count}) catch unreachable;
+            draw_text(string, icon_x, icon_y, 20, raylib.WHITE);
+        }
     }
 
-    fn is_viewing_inventory(self: *const Self) bool {
-        return switch (self.ui_state.current_open_panel) {
-            .empty => false,
-            else => true,
+    // fps text
+    {
+        const fps_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "fps: {}", .{raylib.GetFPS()}) catch unreachable;
+        draw_text(fps_string, window_width() - 100, window_height() - 20, 20, raylib.WHITE);
+    }
+
+    // memory debug info
+    if(debug_memory_usage) {
+        const arena_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "A: {}", .{state.underlying_arena.queryCapacity()}) catch unreachable;
+        draw_text(arena_string, window_width() - 100, 20, 20, raylib.PURPLE);
+
+        const scratch_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "S: {}", .{state.scratch_space.end_index}) catch unreachable;
+        draw_text(scratch_string, window_width() - 100, 40, 20, raylib.PURPLE);
+
+        const max_scratch_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "MS: {}", .{state.max_scratch_space_usage}) catch unreachable;
+        draw_text(max_scratch_string, window_width() - 100, 60, 20, raylib.PURPLE);
+    }
+
+    // inventory
+    {
+        const size = 50;
+        const padding = 5;
+        const slot_y = window_height() - size - padding;
+
+        for(0..9) |i| {
+
+            var color = switch (i) {
+                0 => raylib.RED,
+                1 => raylib.ORANGE,
+                2 => raylib.YELLOW,
+                3 => raylib.GREEN,
+                4 => raylib.SKYBLUE,
+                5 => raylib.BLUE,
+                6 => raylib.VIOLET,
+                7 => raylib.BROWN,
+                8 => raylib.BLACK,
+                else => unreachable
+            };
+
+            color = raylib.Fade(color, 0.7);
+
+            // adding the i * padding gives the gap
+            const slot_x: f32 = @floatFromInt((size * i) + (i * padding) + padding);
+            draw_inventory_slot(&state.g.player.inventory[i], slot_x, slot_y, size, color, state.scratch_space.allocator());
+
+            // draw item selected indicator
+            if(i == state.g.player.selected_item) {
+                const indicator_radius = 5;
+                const indicator_y = slot_y - 10;
+                const indicator_x = slot_x + (size * 0.5);
+
+                draw_circle(indicator_x, indicator_y, indicator_radius, raylib.YELLOW);
+            }
+        }
+    }
+
+    // crafting ui
+    {
+        const padding = 5;
+        const output_icon_size = 50;
+
+        const mouse_screen_position = get_mouse_screen_position();
+
+        for(&crafting_recipes, 0..) |*recipe, _i| {
+            const craftable = state.g.player.can_craft_recipe(recipe);
+            const color = if(craftable) raylib.Fade(raylib.GREEN, 0.7) else raylib.Fade(raylib.RED, 0.7);
+
+            const i = @as(f32, @floatFromInt(_i));
+            const output_icon_x = padding;
+            const output_icon_y = padding + (output_icon_size * i) + (padding * i);
+
+            draw_crafting_recipe_output(recipe, output_icon_x, output_icon_y, output_icon_size, color);
+
+            if(mouse_screen_position.x >= output_icon_x and mouse_screen_position.x <= output_icon_x + output_icon_size) {
+                if(mouse_screen_position.y >= output_icon_y and mouse_screen_position.y <= output_icon_y + output_icon_size) {
+                    draw_crafting_recipe_input(recipe, mouse_screen_position.x + 15, mouse_screen_position.y, output_icon_size);
+
+                    if(craftable and state.input.left_mouse) {
+                        state.g.player.craft_recipe(recipe);
+                    }
+                }
+            }
+        }
+    }
+
+    raylib.EndDrawing();
+}
+
+// removes a tile in a given index in the foreground
+// and replaces it with air, if the tile has an associated
+// tile data then that is also removed
+fn remove_tile_in_foreground(state: *State, tile_index: usize) ?Tile {
+    if(!get_tile_position_from_tile_index(tile_index).is_valid()) {
+        return null;
+    }
+
+    const replcaing_tile = state.g.forground_tiles[tile_index].tile;
+
+    if(replcaing_tile == .air) {
+        return null;
+    }
+
+    const tile_data: ?*TileData = if(replcaing_tile.has_tile_data()) get_tile_data(state, tile_index) else null;
+    replcaing_tile.removed_update(tile_index, tile_data, state);
+
+    if(tile_data) |value| {
+        for(0..state.g.tile_data.items.len) |i| {
+            if(state.g.tile_data.items[i].tile_index == value.tile_index) {
+                _ = state.g.tile_data.swapRemove(i);
+                break;
+            }
+        }
+    }
+
+    if(replcaing_tile.is_network_node()) {
+        // 1. get node info
+        // 2. remove node from network nodes
+        // 3. remove node from neighbour nodes
+        // 4. remove node from network
+        // 5. if network is empty remove network
+
+        // making a copy of node
+        var node: NetworkNode = undefined;
+
+        for(0..state.g.network_nodes.items.len) |i| {
+            if(state.g.network_nodes.items[i].tile_index == tile_index) {
+                node = state.g.network_nodes.items[i];
+                _ = state.g.network_nodes.swapRemove(i);
+                break;
+            }
+        }
+
+        for(node.neighbour_tile_indices.slice()) |neighbour_index| {
+            const neighbour = get_network_node(state, neighbour_index);
+            neighbour.remove_neighbour(tile_index);
+        }
+
+        const network = get_network(state, node.network_id);
+        network.remove_node(&node);
+        rebuild_damaged_network(state, network.network_id);
+    }
+
+    state.g.forground_tiles[tile_index].tile = .air;
+    tile_update_adjectcent_tiles(state, tile_index);
+    return replcaing_tile;
+}
+
+// places a tile in a given index in the foreground
+// if the tile is not air *not empty* then it is
+// not placed and false is returned
+fn place_tile_in_foreground(state: *State, tile_index: usize, tile: Tile) bool {
+    if(state.g.forground_tiles[tile_index].tile != .air) {
+        return false;
+    }
+
+    const direction = if(tile.has_direction()) state.g.player.placement_dirction else .down;
+    state.g.forground_tiles[tile_index] = .{.tile = tile, .direction = direction};
+
+    if(tile.has_tile_data()) {
+        var tile_data = tile.get_default_tile_data();
+        tile_data.tile_index = tile_index;
+
+        state.g.tile_data.append(tile_data) catch |err| {
+            switch (err) {
+                error.OutOfMemory => {
+                    std.debug.panic("out of memory creating new tile data {}", .{err});
+                }
+            }
         };
     }
 
-    fn open_inventory(self: *Self, tile_index: usize) void {
-        const tile = self.forground_tiles[tile_index].tile;
+    if(tile.is_network_node()) {
+        // if we are adding a new network node this is the order of things
+        // to be done
+        //
+        // 1. create a new network with a single node (the new one)
+        // 2. check any possible connections to that new node
+        // 3. if there are try and join the two networks
+        // 4. repeat 2 until false
+        var network = Network.init(state.allocator);
+        const node = NetworkNode.init(tile_index, network.network_id);
 
-        if(!tile.has_clickable_ui()) {
-            return;
-        }
-
-        switch (tile) {
-            .miner => {
-                self.ui_state.current_open_panel = UIPanel.miner_inventory(tile_index);
-            },
-            .furnace => {
-                self.ui_state.current_open_panel = UIPanel.furnace_inventory(tile_index);
-            },
-            .crusher => {
-                self.ui_state.current_open_panel = UIPanel.crusher_inventory(tile_index);
-            },
-            else => unreachable,
-        }
-    }
-
-    fn close_inventory(self: *Self) void {
-        self.ui_state.current_open_panel = UIPanel.empty();
-    }
-
-    fn get_mouse_world_position(self: *const Self) WorldPosition {
-        const screen_position = raylib.GetMousePosition();
-        const world_position = raylib.GetScreenToWorld2D(screen_position, self.camera);
-    
-        return .{.x = world_position.x, .y = world_position.y};
-    } 
-
-    // removes a tile in a given index in the foreground
-    // and replaces it with air, if the tile has an associated
-    // tile data then that is also removed
-    fn remove_tile_in_foreground(self: *Self, tile_index: usize) ?Tile {
-        if(!get_tile_position_from_tile_index(tile_index).is_valid()) {
-            return null;
-        }
-
-        const replcaing_tile = self.forground_tiles[tile_index].tile;
-
-        if(replcaing_tile == .air) {
-            return null;
-        }
-
-        const tile_data: ?*TileData = if(replcaing_tile.has_tile_data()) self.get_tile_data(tile_index) else null;
-        replcaing_tile.removed_update(tile_index, tile_data, self);
-
-        if(tile_data) |value| {
-            for(0..self.tile_data.items.len) |i| {
-                if(self.tile_data.items[i].tile_index == value.tile_index) {
-                    _ = self.tile_data.swapRemove(i);
-                    break;
+        network.nodes.append(node.tile_index) catch |err| {
+            switch (err) {
+                error.OutOfMemory => {
+                    std.debug.panic("out of memory add new network node to network: tile_index: {}, network_id: {}", .{node.tile_index, network.network_id});
                 }
             }
-        }
-
-        if(replcaing_tile.is_network_node()) {
-            // 1. get node info
-            // 2. remove node from network nodes
-            // 3. remove node from neighbour nodes
-            // 4. remove node from network
-            // 5. if network is empty remove network
-           
-            // making a copy of node
-            var node: NetworkNode = undefined;
-
-            for(0..self.network_nodes.items.len) |i| {
-                if(self.network_nodes.items[i].tile_index == tile_index) {
-                    node = self.network_nodes.items[i];
-                    _ = self.network_nodes.swapRemove(i);
-                    break;
-                }
-            }
-
-            for(node.neighbour_tile_indices.slice()) |neighbour_index| {
-                const neighbour = self.get_network_node(neighbour_index);
-                neighbour.remove_neighbour(tile_index);
-            }
-
-            const network = self.get_network(node.network_id);
-            network.remove_node(&node);
-            self.rebuild_damaged_network(network.network_id);
-        }
-                    
-        self.forground_tiles[tile_index].tile = .air;
-        self.tile_update_adjectcent_tiles(tile_index);
-        return replcaing_tile;
-    }
-
-    fn rebuild_damaged_network(self: *Self, network_id: usize) void {
-        while(!self.traverse_nodes_and_replace_network(network_id)) {}
-
-        for(self.networks.items, 0..) |*network, i| {
-            if(network.network_id == network_id) {
-                _ = self.networks.swapRemove(i);
-                break;
-            }
-        }
-    }
-
-    fn traverse_nodes_and_replace_network(self: *Self, old_network_id: usize) bool {
-        // 1. create new network with new id
-        // 2. find the first node with the old network id
-        // 3. flood fill all connecting nodes
-        // 4. replace old id with new one
-        //      - also add nodes to new network
-
-        var node_queue = std.ArrayList(usize).init(self.scratch_space.allocator());
-        var completed_nodes = std.AutoHashMap(usize, void).init(self.scratch_space.allocator());
-
-        var new_network = Network.init(self.allocator);
-
-        defer node_queue.deinit();
-        defer completed_nodes.deinit();
-
-        // find the first node with the old id and add to list
-        for(self.network_nodes.items) |*node| {
-            if(node.network_id == old_network_id) {
-                node_queue.append(node.tile_index) catch std.debug.panic("scratch space out of memory\n", .{});
-                break;
-            }
-        }
-
-        if(node_queue.items.len == 0) {
-            return true; // complete no old nodes
-        }
-
-        while(node_queue.items.len > 0) {
-            const current_node_index = node_queue.pop();
-            if(completed_nodes.contains(current_node_index)) {
-                continue;
-            } else {
-                completed_nodes.put(current_node_index, {}) catch unreachable;
-            }
-
-            const current_node = self.get_network_node(current_node_index);
-            for(current_node.neighbour_tile_indices.slice()) |neighbour_index| {
-                node_queue.append(neighbour_index) catch unreachable;
-            }
-
-            current_node.network_id = new_network.network_id;
-            new_network.add_node(current_node);
-        }
-
-        self.networks.append(new_network) catch unreachable;
-
-        return false; // no new nodes so return false to call again
-    }
-
-    // places a tile in a given index in the foreground
-    // if the tile is not air *not empty* then it is
-    // not placed and false is returned
-    fn place_tile_in_foreground(self: *Self, tile_index: usize, tile: Tile) bool {
-        if(self.forground_tiles[tile_index].tile != .air) {
-            return false;
-        }
-        
-        const direction = if(tile.has_direction()) self.player.placement_dirction else .down;
-        self.forground_tiles[tile_index] = .{.tile = tile, .direction = direction};
-
-        if(tile.has_tile_data()) {
-            var tile_data = tile.get_default_tile_data();
-            tile_data.tile_index = tile_index;
-
-            self.tile_data.append(tile_data) catch |err| {
-                switch (err) {          
-                    error.OutOfMemory => {
-                        std.debug.panic("out of memory creating new tile data {}", .{err});
-                    }
-                }
-            };
-        }
-
-        if(tile.is_network_node()) {
-            // if we are adding a new network node this is the order of things
-            // to be done
-            //
-            // 1. create a new network with a single node (the new one)
-            // 2. check any possible connections to that new node
-            // 3. if there are try and join the two networks
-            // 4. repeat 2 until false
-            var network = Network.init(self.allocator);
-            const node = NetworkNode.init(tile_index, network.network_id);
-
-            network.nodes.append(node.tile_index) catch |err| {
-                switch (err) {          
-                    error.OutOfMemory => {
-                        std.debug.panic("out of memory add new network node to network: tile_index: {}, network_id: {}", .{node.tile_index, network.network_id});
-                    }
-                }
-            };
-
-            self.networks.append(network) catch |err| {
-                switch (err) {          
-                    error.OutOfMemory => {
-                        std.debug.panic("out of memory add new network to game: network_id: {}", .{network.network_id});
-                    }
-                }
-            };
-
-            self.network_nodes.append(node) catch |err| {
-                switch (err) {          
-                    error.OutOfMemory => {
-                        std.debug.panic("out of memory creating new network node {}", .{err});
-                    }
-                }
-            };
-
-            self.search_for_network_connections(tile_index);
-        }
-
-        if(tile.has_tile_data()) {
-            tile.tile_update(tile_index, &self.tile_data.items[self.tile_data.items.len - 1], self);
-        } else {
-            tile.tile_update(tile_index, null, self);
-        }
-
-        self.tile_update_adjectcent_tiles(tile_index);
-        return true;
-    }
-
-    fn tile_update_adjectcent_tiles(self: *Self, tile_index: usize) void {
-        const tile_position = get_tile_position_from_tile_index(tile_index);
-        const adjacent_tile_positions = [_]TilePosition{
-            tile_position.get_adjacent_tile_at_direction(.up),
-            tile_position.get_adjacent_tile_at_direction(.left),
-            tile_position.get_adjacent_tile_at_direction(.right),
-            tile_position.get_adjacent_tile_at_direction(.down),
         };
 
-        for(&adjacent_tile_positions) |*position| {
-            if(!position.is_valid()) {
+        state.g.networks.append(network) catch |err| {
+            switch (err) {
+                error.OutOfMemory => {
+                    std.debug.panic("out of memory add new network to game: network_id: {}", .{network.network_id});
+                }
+            }
+        };
+
+        state.g.network_nodes.append(node) catch |err| {
+            switch (err) {
+                error.OutOfMemory => {
+                    std.debug.panic("out of memory creating new network node {}", .{err});
+                }
+            }
+        };
+
+        search_for_network_connections(state, tile_index);
+    }
+
+    if(tile.has_tile_data()) {
+        tile.tile_update(tile_index, &state.g.tile_data.items[state.g.tile_data.items.len - 1], state);
+    } else {
+        tile.tile_update(tile_index, null, state);
+    }
+
+    tile_update_adjectcent_tiles(state, tile_index);
+    return true;
+}
+
+fn tile_update_adjectcent_tiles(state: *State, tile_index: usize) void {
+    const tile_position = get_tile_position_from_tile_index(tile_index);
+    const adjacent_tile_positions = [_]TilePosition{
+        tile_position.get_adjacent_tile_at_direction(.up),
+        tile_position.get_adjacent_tile_at_direction(.left),
+        tile_position.get_adjacent_tile_at_direction(.right),
+        tile_position.get_adjacent_tile_at_direction(.down),
+    };
+
+    for(&adjacent_tile_positions) |*position| {
+        if(!position.is_valid()) {
+            continue;
+        }
+
+        const target_index = position.get_tile_index();
+        const target_tile = state.g.forground_tiles[target_index].tile;
+        if(target_tile == .air) continue;
+
+        var target_tile_data: ?*TileData = undefined;
+        if(target_tile.has_tile_data()) {
+            target_tile_data = get_tile_data(state, target_index);
+        }
+
+        state.g.forground_tiles[target_index].tile.tile_update(target_index, target_tile_data, state);
+    }
+}
+
+fn search_for_network_connections(state: *State, tile_index: usize) void {
+    const search_radius = 3;
+    const tile_position = get_tile_position_from_tile_index(tile_index);
+
+    if(!state.g.forground_tiles[tile_index].tile.is_network_node()) {
+        return;
+    }
+
+    const is_this_tile_connector = state.g.forground_tiles[tile_index].tile.is_network_node_connector();
+
+    for(tile_position.y - search_radius..tile_position.y + search_radius + 1) |y| {
+        for(tile_position.x - search_radius..tile_position.x + search_radius + 1) |x| {
+            const target_position = TilePosition{.x = x, .y = y};
+
+            if(x == tile_position.x and y == tile_position.y) {
+                continue; // search tile is the same as the source tile
+            }
+
+            if(!target_position.is_valid()) {
                 continue;
             }
 
-            const target_index = position.get_tile_index();
-            const target_tile = self.forground_tiles[target_index].tile;
-            if(target_tile == .air) continue;
+            const target_tile_index = target_position.get_tile_index();
+            const target_tile = state.g.forground_tiles[target_tile_index].tile;
 
-            var target_tile_data: ?*TileData = undefined;
-            if(target_tile.has_tile_data()) {
-                target_tile_data = self.get_tile_data(target_index);
+            // check if the other tile is a network node if it is not
+            // then do not connect
+            // check if either tile is a connector node, if both are not
+            // then do not connect them
+            if(
+                !target_tile.is_network_node() or
+                (!is_this_tile_connector and
+                !target_tile.is_network_node_connector())
+            ) {
+                continue;
             }
 
-            self.forground_tiles[target_index].tile.tile_update(target_index, target_tile_data, self);
+            const source_node = get_network_node(state, tile_index);
+            const target_node = get_network_node(state, target_tile_index);
+
+            const source_network = get_network(state, source_node.network_id);
+            const target_network = get_network(state, target_node.network_id);
+
+            connect_networks_at_nodes(state, source_network, target_network, source_node, target_node);
+        }
+    }
+}
+
+fn connect_networks_at_nodes(state: *State, source_network: *Network, target_network: *Network, source_node: *NetworkNode, target_node: *NetworkNode) void {
+    // 1. connect the nodes together
+    // 2. if the networks are the same then dont merge
+    // 3. check the size of each netowrk
+    // 4. the smaller one is eaten by the bigger
+    //      - change network ids in smaller network
+    //      - add the nodes to the bigger network
+
+    source_node.add_neighbour(target_node.tile_index);
+    target_node.add_neighbour(source_node.tile_index);
+
+    if(source_node.network_id == target_network.network_id) {
+        return;
+    }
+
+    var bigger_network : *Network = undefined;
+    var smaller_network : *Network = undefined;
+
+    if(source_network.nodes.items.len > target_network.nodes.items.len) {
+        bigger_network = source_network;
+        smaller_network = target_network;
+    } else {
+        bigger_network = target_network;
+        smaller_network = source_network;
+    }
+
+    for(state.g.network_nodes.items) |*node| {
+        if(node.network_id == smaller_network.network_id) {
+            node.network_id = bigger_network.network_id;
         }
     }
 
-    fn search_for_network_connections(self: *Self, tile_index: usize) void {
-        const search_radius = 3;
-        const tile_position = get_tile_position_from_tile_index(tile_index);
+    bigger_network.nodes.appendSlice(smaller_network.nodes.items) catch unreachable;
 
-        if(!self.forground_tiles[tile_index].tile.is_network_node()) {
-            return;
+    for(0..state.g.networks.items.len) |i| {
+        if(state.g.networks.items[i].network_id == smaller_network.network_id) {
+            _ = state.g.networks.swapRemove(i);
+            break;
         }
+    }
+}
 
-        const is_this_tile_connector = self.forground_tiles[tile_index].tile.is_network_node_connector();
+fn rebuild_damaged_network(state: *State, network_id: usize) void {
+    while(!traverse_nodes_and_replace_network(state, network_id)) {}
 
-        for(tile_position.y - search_radius..tile_position.y + search_radius + 1) |y| {
-            for(tile_position.x - search_radius..tile_position.x + search_radius + 1) |x| {
-                const target_position = TilePosition{.x = x, .y = y};
+    for(state.g.networks.items, 0..) |*network, i| {
+        if(network.network_id == network_id) {
+            _ = state.g.networks.swapRemove(i);
+            break;
+        }
+    }
+}
 
-                if(x == tile_position.x and y == tile_position.y) {
-                    continue; // search tile is the same as the source tile
-                }
+fn traverse_nodes_and_replace_network(state: *State, old_network_id: usize) bool {
+    // 1. create new network with new id
+    // 2. find the first node with the old network id
+    // 3. flood fill all connecting nodes
+    // 4. replace old id with new one
+    //      - also add nodes to new network
 
-                if(!target_position.is_valid()) {
-                    continue;
-                }
+    var node_queue = std.ArrayList(usize).init(state.scratch_space.allocator());
+    var completed_nodes = std.AutoHashMap(usize, void).init(state.scratch_space.allocator());
 
-                const target_tile_index = target_position.get_tile_index();
-                const target_tile = self.forground_tiles[target_tile_index].tile;
+    var new_network = Network.init(state.allocator);
 
-                // check if the other tile is a network node if it is not
-                // then do not connect
-                // check if either tile is a connector node, if both are not
-                // then do not connect them
-                if(
-                    !target_tile.is_network_node() or
-                    (!is_this_tile_connector and
-                    !target_tile.is_network_node_connector())
-                ) {
-                    continue;
-                }
+    defer node_queue.deinit();
+    defer completed_nodes.deinit();
 
-                const source_node = self.get_network_node(tile_index);
-                const target_node = self.get_network_node(target_tile_index);
-
-                const source_network = self.get_network(source_node.network_id);
-                const target_network = self.get_network(target_node.network_id);
-
-                self.connect_networks_at_nodes(source_network, target_network, source_node, target_node);
-            }
+    // find the first node with the old id and add to list
+    for(state.g.network_nodes.items) |*node| {
+        if(node.network_id == old_network_id) {
+            node_queue.append(node.tile_index) catch std.debug.panic("scratch space out of memory\n", .{});
+            break;
         }
     }
 
-    fn connect_networks_at_nodes(self: *Self, source_network: *Network, target_network: *Network, source_node: *NetworkNode, target_node: *NetworkNode) void {
-        // 1. connect the nodes together
-        // 2. if the networks are the same then dont merge
-        // 3. check the size of each netowrk
-        // 4. the smaller one is eaten by the bigger
-        //      - change network ids in smaller network
-        //      - add the nodes to the bigger network
+    if(node_queue.items.len == 0) {
+        return true; // complete no old nodes
+    }
 
-        source_node.add_neighbour(target_node.tile_index);
-        target_node.add_neighbour(source_node.tile_index);
-
-        if(source_node.network_id == target_network.network_id) {
-            return;
-        }
-    
-        var bigger_network : *Network = undefined;
-        var smaller_network : *Network = undefined;
-
-        if(source_network.nodes.items.len > target_network.nodes.items.len) {
-            bigger_network = source_network;
-            smaller_network = target_network;
+    while(node_queue.items.len > 0) {
+        const current_node_index = node_queue.pop();
+        if(completed_nodes.contains(current_node_index)) {
+            continue;
         } else {
-            bigger_network = target_network;
-            smaller_network = source_network;
-        }
-   
-        for(self.network_nodes.items) |*node| {
-            if(node.network_id == smaller_network.network_id) {
-                node.network_id = bigger_network.network_id;
-            }
+            completed_nodes.put(current_node_index, {}) catch unreachable;
         }
 
-        bigger_network.nodes.appendSlice(smaller_network.nodes.items) catch unreachable;
+        const current_node = get_network_node(state, current_node_index);
+        for(current_node.neighbour_tile_indices.slice()) |neighbour_index| {
+            node_queue.append(neighbour_index) catch unreachable;
+        }
 
-        for(0..self.networks.items.len) |i| {
-            if(self.networks.items[i].network_id == smaller_network.network_id) {
-                _ = self.networks.swapRemove(i);
-                break;
-            }
+        current_node.network_id = new_network.network_id;
+        new_network.add_node(current_node);
+    }
+
+    state.g.networks.append(new_network) catch unreachable;
+
+    return false; // no new nodes so return false to call again
+}
+
+fn is_viewing_inventory(state: *const State) bool {
+    return switch (state.g.ui_state.current_open_panel) {
+        .empty => false,
+        else => true,
+    };
+}
+
+fn open_inventory(state: *State, tile_index: usize) void {
+    const tile = state.g.forground_tiles[tile_index].tile;
+
+    if(!tile.has_clickable_ui()) {
+        return;
+    }
+
+    switch (tile) {
+        .miner => {
+            state.g.ui_state.current_open_panel = UIPanel.miner_inventory(tile_index);
+        },
+        .furnace => {
+            state.g.ui_state.current_open_panel = UIPanel.furnace_inventory(tile_index);
+        },
+        .crusher => {
+            state.g.ui_state.current_open_panel = UIPanel.crusher_inventory(tile_index);
+        },
+        else => unreachable,
+    }
+}
+
+fn close_inventory(state: *State) void {
+    state.g.ui_state.current_open_panel = UIPanel.empty();
+}
+
+fn get_mouse_world_position(state: *const State) WorldPosition {
+    const screen_position = raylib.GetMousePosition();
+    const world_position = raylib.GetScreenToWorld2D(screen_position, state.g.camera);
+
+    return .{.x = world_position.x, .y = world_position.y};
+}
+
+// WARNING: the pointer is fragile it should not be stored
+// accross frames, use the id to get a new version of it
+fn get_network(state: *State, network_id: usize) *Network {
+    for(state.g.networks.items) |*network| {
+        if(network.network_id == network_id) {
+            return network;
         }
     }
 
-    // WARNING: the pointer is fragile it should not be stored
-    // accross frames, use the id to get a new version of it
-    fn get_network(self: *Self, network_id: usize) *Network {
-        for(self.networks.items) |*network| {
-            if(network.network_id == network_id) {
-                return network;
-            }
-        }
+    std.debug.panic("tried to get network with ide: {} and failed\n", .{network_id});
+}
 
-        std.debug.panic("tried to get network with ide: {} and failed\n", .{network_id});
+// WARNING: the pointer is fragile it should not be stored
+// accross frames, use the id to get a new version of it
+fn get_network_node(state: *const State, tile_index: usize) *NetworkNode {
+    for(state.g.network_nodes.items) |*node| {
+        if(node.tile_index == tile_index) {
+            // this pointer should not be stored across frames
+            // if the tile data buffer changes the underlying
+            // memory could become invalid or change
+            return node;
+        }
     }
 
-    // WARNING: the pointer is fragile it should not be stored
-    // accross frames, use the id to get a new version of it
-    fn get_network_node(self: *const Self, tile_index: usize) *NetworkNode {
-        for(self.network_nodes.items) |*node| {
-            if(node.tile_index == tile_index) {
-                // this pointer should not be stored across frames
-                // if the tile data buffer changes the underlying
-                // memory could become invalid or change
-                return node;
-            }
-        }
+    std.debug.panic("tried to get network node at index: {} and failed\n", .{tile_index});
+}
 
-        std.debug.panic("tried to get network node at index: {} and failed\n", .{tile_index});
+// WARNING: the pointer is fragile it should not be stored
+// accross frames, use the index to get a new version of it
+fn get_tile_data(state: *const State, tile_index: usize) *TileData {
+    for(state.g.tile_data.items) |*tile_data| {
+        if(tile_data.tile_index == tile_index) {
+            // this pointer should not be stored across frames
+            // if the tile data buffer changes the underlying
+            // memory could become invalid or change
+            return tile_data;
+        }
     }
 
-    // WARNING: the pointer is fragile it should not be stored
-    // accross frames, use the index to get a new version of it
-    fn get_tile_data(self: *const Self, tile_index: usize) *TileData {
-        for(self.tile_data.items) |*tile_data| {
-            if(tile_data.tile_index == tile_index) {
-                // this pointer should not be stored across frames
-                // if the tile data buffer changes the underlying
-                // memory could become invalid or change
-                return tile_data;
-            }
-        }
+    std.debug.panic("tried to get tile data at index: {} and failed\n", .{tile_index});
+}
 
-        std.debug.panic("tried to get tile data at index: {} and failed\n", .{tile_index});
+fn generate_world(state: *State) void {
+    // base terrain pass
+    for(0..state.g.background_tiles.len) |i| {
+        // right now setting every tile by default
+        // to grass at some point this will change
+        const tile_value: Tile = .grass;
+        state.g.background_tiles[i] = tile_value;
     }
 
-    fn generate_world(self: *Game) void {
-        // base terrain pass
-        for(0..self.background_tiles.len) |i| {
-            // right now setting every tile by default
-            // to grass at some point this will change
-            const tile_value: Tile = .grass;
-            self.background_tiles[i] = tile_value;
-        }
-
-        // ore generation pass
-        for(0..self.background_tiles.len) |i| {
-            for(&ore_table) |*ore| {
-                const noise_generator = fastnoise.Noise(f32) {
-                    .seed = self.seed,
-                    .noise_type = .perlin,
-                    .frequency = ore.frequency,
-                    .gain = 0.01,
-                    .fractal_type = .fbm,
-                    .lacunarity = 0.40,
-                    .cellular_distance = .euclidean,
-                    .cellular_return = .distance2,
-                    .cellular_jitter_mod = 0.88,
-                    .octaves = 2
-                };
-
-                var noise = noise_generator.genNoise2D(@floatFromInt(@mod(i, world_tile_width)), @floatFromInt(@divFloor(i, world_tile_width)));
-
-                // normalise noise from -1 to 1 -> 0 to 1
-                noise = (noise + 1) * 0.5;
-
-                if(noise < ore.threshold) {
-                    self.background_tiles[i] = ore.tile;
-                    continue;
-                }
-            }
-        }
-
-        // tree generation pass
-        tree_check: for((world_tile_width * 3)..self.forground_tiles.len) |i| {
+    // ore generation pass
+    for(0..state.g.background_tiles.len) |i| {
+        for(&ore_table) |*ore| {
             const noise_generator = fastnoise.Noise(f32) {
-                .seed = self.seed,
+                .seed = state.g.seed,
                 .noise_type = .perlin,
-                .frequency = 0.6,
+                .frequency = ore.frequency,
                 .gain = 0.01,
                 .fractal_type = .fbm,
                 .lacunarity = 0.40,
@@ -3503,104 +3035,193 @@ const Game = struct {
             // normalise noise from -1 to 1 -> 0 to 1
             noise = (noise + 1) * 0.5;
 
-            const tree_height = 3;
-            const base_tile_position = get_tile_position_from_tile_index(i);
-
-            if(!(noise < 0.2 and self.background_tiles[i] == .grass)) {
-                continue :tree_check;
-            }
-
-            for(0..tree_height) |j| {
-                const offset_position = TilePosition{.x = base_tile_position.x, .y = base_tile_position.y - j};
-                if(!offset_position.is_valid()) {
-                    continue :tree_check;
-                }
-
-                const checking_tile_index = offset_position.get_tile_index();
-                if(self.forground_tiles[checking_tile_index].tile != .air) {
-                    continue :tree_check;
-                }
-            }
-
-            self.forground_tiles[i] = .{.tile = .tree_base, .direction = .down};
-                
-            for(1..tree_height) |j| {
-                const offset_position = TilePosition{.x = base_tile_position.x, .y = base_tile_position.y - j};
-                const tile_index = offset_position.get_tile_index();
-                self.forground_tiles[tile_index] = .{.tile = .tree_0, .direction = .down};
+            if(noise < ore.threshold) {
+                state.g.background_tiles[i] = ore.tile;
+                continue;
             }
         }
     }
-};
+
+    // tree generation pass
+    tree_check: for((world_tile_width * 3)..state.g.forground_tiles.len) |i| {
+        const noise_generator = fastnoise.Noise(f32) {
+            .seed = state.g.seed,
+            .noise_type = .perlin,
+            .frequency = 0.6,
+            .gain = 0.01,
+            .fractal_type = .fbm,
+            .lacunarity = 0.40,
+            .cellular_distance = .euclidean,
+            .cellular_return = .distance2,
+            .cellular_jitter_mod = 0.88,
+            .octaves = 2
+        };
+
+        var noise = noise_generator.genNoise2D(@floatFromInt(@mod(i, world_tile_width)), @floatFromInt(@divFloor(i, world_tile_width)));
+
+        // normalise noise from -1 to 1 -> 0 to 1
+        noise = (noise + 1) * 0.5;
+
+        const tree_height = 3;
+        const base_tile_position = get_tile_position_from_tile_index(i);
+
+        if(!(noise < 0.2 and state.g.background_tiles[i] == .grass)) {
+            continue :tree_check;
+        }
+
+        for(0..tree_height) |j| {
+            const offset_position = TilePosition{.x = base_tile_position.x, .y = base_tile_position.y - j};
+            if(!offset_position.is_valid()) {
+                continue :tree_check;
+            }
+
+            const checking_tile_index = offset_position.get_tile_index();
+            if(state.g.forground_tiles[checking_tile_index].tile != .air) {
+                continue :tree_check;
+            }
+        }
+
+        state.g.forground_tiles[i] = .{.tile = .tree_base, .direction = .down};
+
+        for(1..tree_height) |j| {
+            const offset_position = TilePosition{.x = base_tile_position.x, .y = base_tile_position.y - j};
+            const tile_index = offset_position.get_tile_index();
+            state.g.forground_tiles[tile_index] = .{.tile = .tree_0, .direction = .down};
+        }
+    }
+}
+
+/////////////////////////////////////////////////////////////////////////////////
+///                         @render
+////////////////////////////////////////////////////////////////////////////////
+fn draw_rectangle(x: f32, y: f32, width: f32, height: f32, color: raylib.Color) void {
+    raylib.DrawRectangle(
+        @as(c_int, @intFromFloat(x)), 
+        @as(c_int, @intFromFloat(y)), 
+        @as(c_int, @intFromFloat(width)), 
+        @as(c_int, @intFromFloat(height)), 
+        color
+    );
+}
+
+fn draw_rectangle_gradient_vertical(x: f32, y: f32, width: f32, height: f32, start_color: raylib.Color, end_color: raylib.Color) void {
+    raylib.DrawRectangleGradientV(
+        @as(c_int, @intFromFloat(x)), 
+        @as(c_int, @intFromFloat(y)), 
+        @as(c_int, @intFromFloat(width)), 
+        @as(c_int, @intFromFloat(height)), 
+        start_color,
+        end_color
+    );
+}
+
+fn draw_circle(x: f32, y: f32, radius: f32, color: raylib.Color) void {
+    raylib.DrawCircle(
+        @as(c_int, @intFromFloat(x)), 
+        @as(c_int, @intFromFloat(y)), 
+        radius, 
+        color
+    );
+}
+
+fn draw_line(start_x: f32, start_y: f32, end_x: f32, end_y: f32, THICKNESS: f32, color: raylib.Color) void {
+    raylib.DrawLineEx(
+        .{.x = start_x, .y = start_y},
+        .{.x = end_x, .y = end_y},
+        THICKNESS,
+        color
+    );
+}
+
+fn draw_text(text: []const u8, x: f32, y: f32, font_size: i32, color: raylib.Color) void {
+    raylib.DrawText(
+        &text[0],
+        @as(c_int, @intFromFloat(x)), 
+        @as(c_int, @intFromFloat(y)), 
+        @as(c_int, @intCast(font_size)), 
+        color
+    );
+}
+
+inline fn draw_texture(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32) void {
+    draw_texture_tint(texture, x, y, width, height, raylib.WHITE);
+}
+
+inline fn draw_texture_tint(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, tint: raylib.Color) void {
+    draw_texture_pro(texture, x, y, width, height, 0, tint, false);
+}
+
+fn draw_texture_pro(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, rotation: f32, tint: raylib.Color, centred: bool) void {
+    // Source rectangle (part of the texture to use for drawing)
+    const source_rectagle: raylib.Rectangle = .{ .x = 0, .y = 0, .width = @as(f32, @floatFromInt(texture.width)), .height = @as(f32, @floatFromInt(texture.height)) };
+
+    // Destination rectangle (screen rectangle where drawing part of texture)
+    var destination_rectangle: raylib.Rectangle = .{ .x = x, .y = y, .width = width, .height = height};
+
+    if(centred) {
+        destination_rectangle.x -= width / 2;
+        destination_rectangle.y -= height / 2;
+    }
+
+    raylib.DrawTexturePro(texture, source_rectagle, destination_rectangle, .{}, rotation, tint);
+}
+
+fn draw_inventory_slot(inventory_slot: *const InventorySlot, x: f32, y: f32, size: f32, tint: raylib.Color, allocator: std.mem.Allocator) void {
+    draw_texture_tint(get_alt_texture(.item_slot), x, y, size, size, tint);
+
+    if(inventory_slot.item_type) |item| {                     
+        const item_texture = item.get_texture();
+        draw_texture(item_texture, x, y, size, size);
+
+        const string = std.fmt.allocPrintZ(allocator, "{}", .{inventory_slot.count}) catch unreachable;
+        draw_text(string, x, y, 20, raylib.WHITE);
+    }
+}
+
+fn draw_crafting_recipe_output(recipe: *const CraftingRecipe, x: f32, y: f32, size: f32, tint: raylib.Color) void {
+    const item_texture = recipe.output.item.get_texture();
+
+    draw_texture_tint(get_alt_texture(.item_slot), x, y, size, size, tint);
+    draw_texture(item_texture, x, y, size, size);
+}
+
+fn draw_crafting_recipe_input(recipe: *const CraftingRecipe, x: f32, y: f32, size: f32) void {
+    const padding = 5;
+
+    for(0..recipe.input_count) |_i| {
+        const i = @as(f32, @floatFromInt(_i));
+        const input = &recipe.inputs[_i];
+        const item_texture = input.item.get_texture();
+        const input_x = x + (size * i) + (padding * i);
+
+        draw_texture_tint(get_alt_texture(.item_slot), input_x, y, size, size, raylib.BLUE);
+        draw_texture(item_texture, input_x, y, size, size);
+
+        var text_buffer = std.mem.zeroes([2]u8); 
+        const string = std.fmt.bufPrint(text_buffer[0..], "{}", .{input.count}) catch unreachable;
+        draw_text(string, input_x, y, 20, raylib.WHITE);
+
+    }
+}
+
+fn draw_progress_bar_vertical(x: f32, y: f32, width: f32, max_height: f32, start_color: raylib.Color, end_color: raylib.Color, value: i64, max_value: i64) void {
+    const progress =  @as(f32, @floatFromInt(value)) / @as(f32, @floatFromInt(max_value));
+    const progress_bar_end_y = y + max_height;
+    const progress_bar_start_y = progress_bar_end_y - (progress * max_height);
+    const progress_bar_height = progress_bar_end_y - progress_bar_start_y;
+
+    draw_rectangle_gradient_vertical(x, progress_bar_start_y, width, progress_bar_height, end_color, start_color);
+}
 
 /////////////////////////////////////////////////////////////////////////////////
 ///                         @random
 /////////////////////////////////////////////////////////////////////////////////
-fn move_draw_location_on_direction(world_position: WorldPosition, direction: Direction) WorldPosition {
-    var new_position = world_position;
-    switch (direction) {     
-        .left => {
-            new_position.x += tile_width; 
-        },
-        .up => {
-            new_position.x += tile_width;
-            new_position.y += tile_height;
-        },
-        .right => {
-            new_position.y += tile_height;
-        },
-        .down => {}
-    }
-    
-    return new_position;
+fn window_width() f32 {
+    return @as(f32, @floatFromInt(raylib.GetScreenWidth()));
 }
 
-fn get_mouse_screen_position() WorldPosition {
-    const screen_position = raylib.GetMousePosition();
-    return .{.x = screen_position.x, .y = screen_position.y};
-}
-
-fn init_raylib(title: [*c]const u8) void {
-        raylib.InitWindow(default_screen_width, default_screen_height, title);
-        raylib.SetTargetFPS(0);
-}
-
-fn get_tile_position_from_tile_index(tile_index: usize) TilePosition {
-        const x = @mod(tile_index, world_tile_width);
-        const y = @divFloor(tile_index, world_tile_width); 
-        return .{.x = x, .y = y};
-}
-
-fn load_texture(relative_texture_path: []const u8) !raylib.Texture {
-    var base_path_buffer = std.mem.zeroes([std.fs.MAX_PATH_BYTES]u8);
-    
-    const cwd_dir = std.fs.cwd();
-    const base_path = try cwd_dir.realpath(".", base_path_buffer[0..]);
-
-    var texture_path_buffer = std.mem.zeroes([std.fs.MAX_PATH_BYTES]u8);
-    const texture_path = try std.fmt.bufPrint(texture_path_buffer[0..], "{s}/resources/textures/{s}", .{base_path, relative_texture_path});
-
-    const texture = raylib.LoadTexture(&texture_path[0]);
-    if(texture.id <= 0) {
-        std.debug.panic("unable to load texture with path {s}\n", .{texture_path});
-    }
-
-    return texture;
-}
-
-fn load_spline(relative_spline_path: []const u8) !Spline {
-    const cwd = std.fs.cwd();
-
-    var spline_path_buffer = std.mem.zeroes([std.fs.MAX_PATH_BYTES]u8);
-    const spline_path = try std.fmt.bufPrint(spline_path_buffer[0..], "./resources/splines/{s}", .{relative_spline_path});
-
-    const file = try cwd.openFile(spline_path, .{});
-    
-    var spline_buffer: [@sizeOf(Spline)]u8 = undefined;
-    const read_size = try file.readAll(spline_buffer[0..]);
-    std.debug.assert(read_size == spline_buffer.len);
-
-    return std.mem.bytesToValue(Spline, spline_buffer[0..]);
+fn window_height() f32 {
+    return @as(f32, @floatFromInt(raylib.GetScreenHeight()));
 }
 
 // relative output direction is ignored if it is straight
@@ -3630,145 +3251,35 @@ fn get_belt_spline(is_straight: bool, is_left_side: bool, direction: Direction, 
         }
     }
 
-    return splines[index];
+    return m.splines[index];
 }
 
-fn load_resources() !void {
-    const Loaded = struct {
-        var loaded = false;
-    };
-
-    if(Loaded.loaded) {
-        for(&tile_textures) |texture| {
-            raylib.UnloadTexture(texture);
-        }
-
-        for(&item_textures) |texture| {
-            raylib.UnloadTexture(texture);
-        }
-
-        for(&alt_textures) |texture| {
-            raylib.UnloadTexture(texture);
-        }
+fn move_draw_location_on_direction(world_position: WorldPosition, direction: Direction) WorldPosition {
+    var new_position = world_position;
+    switch (direction) {     
+        .left => {
+            new_position.x += tile_width; 
+        },
+        .up => {
+            new_position.x += tile_width;
+            new_position.y += tile_height;
+        },
+        .right => {
+            new_position.y += tile_height;
+        },
+        .down => {}
     }
-
-    tile_textures = .{
-       try load_texture(grass_tile_image_path),
-       try load_texture(stone_tile_image_path),
-       try load_texture(iron_ore_tile_image_path),
-       try load_texture(miner_tile_image_path),
-       try load_texture(coal_ore_tile_image_path),
-       try load_texture(furnace_tile_image_path),
-       try load_texture(tree_base_image_path),
-       try load_texture(tree_0_image_path),
-       try load_texture(extractor_image_path),
-       try load_texture(belt_image_path),
-       try load_texture(belt_left_image_path),
-       try load_texture(belt_right_image_path),
-       try load_texture(pipe_merger_image_path),
-       try load_texture(pole_image_path),
-       try load_texture(battery_image_path),
-       try load_texture(crusher_image_path),
-    };
-
-    item_textures = .{
-       try load_texture(iron_item_image_path),
-       try load_texture(coal_item_image_path),
-       try load_texture(iron_ingot_item_image_path),
-       try load_texture(stone_item_image_path),
-       try load_texture(wood_item_image_path),
-    };
-
-    alt_textures = .{
-       try load_texture(item_slot_image_path),
-    };
-
-    const straight_belt_down_left = try load_spline(straight_belt_left_spline_path);
-    const curved_belt_down_left = try load_spline(curved_belt_left_spline_path);
-    const curved_belt_down_right = try load_spline(curved_belt_right_spline_path);
-
-    // index by -> straight/curved -> direction -> out direction
-    splines = .{
-        // straight
-        straight_belt_down_left,                                            // ^ |
-        straight_belt_down_left.mirror_x(),                                 // | ^
-
-        straight_belt_down_left.mirror_x().mirror_y(),                      // | V
-        straight_belt_down_left.mirror_y(),                                 // V |
-                                                        
-        straight_belt_down_left.rotate_clockwise(),                         // >
-                                                                            // -
-
-        straight_belt_down_left.mirror_x().rotate_clockwise(),              // -
-                                                                            // >
-
-
-        straight_belt_down_left.rotate_counter_clockwise(),                 // -
-                                                                            // <
-
-        straight_belt_down_left.mirror_x().rotate_counter_clockwise(),      // <
-                                                                            // -
-
-        // curved
-        curved_belt_down_left,                                              // > |
-        curved_belt_down_right,                                             // | >
-
-        curved_belt_down_left.mirror_x().mirror_y(),                        // | <
-        curved_belt_down_right.mirror_x().mirror_y(),                       // < |
-                                                        
-        curved_belt_down_left.rotate_clockwise(),                           // V
-                                                                            // -
-
-        curved_belt_down_right.rotate_clockwise(),                          // -
-                                                                            // V
-
-
-        curved_belt_down_left.rotate_counter_clockwise(),                   // -
-                                                                            // ^
-
-        curved_belt_down_right.rotate_counter_clockwise(),                  // ^
-                                                                            // -
-  
-        // curved but left this time
-        curved_belt_down_right.mirror_x(),                                  // < |
-        curved_belt_down_left.mirror_x(),                                   // | <
-
-        curved_belt_down_right.mirror_y(),                                  // | >
-        curved_belt_down_left.mirror_y(),                                   // > |
-                                                        
-        curved_belt_down_right.mirror_x().rotate_clockwise(),               // ^
-                                                                            // -
-
-        curved_belt_down_left.mirror_x().rotate_clockwise(),                // -
-                                                                            // ^
-
-
-        curved_belt_down_right.mirror_x().rotate_counter_clockwise(),       // -
-                                                                            // V
-
-        curved_belt_down_left.mirror_x().rotate_counter_clockwise(),        // V
-                                                                            // -
-    };
-
-    Loaded.loaded = true;
+    
+    return new_position;
 }
 
-/////////////////////////////////////////////////////////////////////////////////
-///                         @main
-/////////////////////////////////////////////////////////////////////////////////
-pub fn main() !void {
-    init_raylib("factory game");
-    var game_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer game_arena.deinit();
- 
-    const allocator = game_arena.allocator();
+fn get_mouse_screen_position() WorldPosition {
+    const screen_position = raylib.GetMousePosition();
+    return .{.x = screen_position.x, .y = screen_position.y};
+}
 
-    try load_resources();
-    
-    // tile texture setup
-    // item texture setup
-        var game = try Game.init(&game_arena, allocator);
-    game.generate_world();
-    game.run();
-
+fn get_tile_position_from_tile_index(tile_index: usize) TilePosition {
+        const x = @mod(tile_index, world_tile_width);
+        const y = @divFloor(tile_index, world_tile_width); 
+        return .{.x = x, .y = y};
 }
