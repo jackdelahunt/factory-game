@@ -1,13 +1,17 @@
 const std = @import("std");
 
-const m = @import("main.zig");
 
 const raylib = @cImport(@cInclude("raylib.h"));
 const raygui = @cImport(@cInclude("raygui.h"));
 
+const m = @import("main.zig");
+
 const Spline = m.Spline;
 const SplinePoint = m.SplinePoint;
 const State = m.State;
+
+const game = @import("game.zig");
+const render = @import("render.zig");
 
 const screen_width = 1000;
 const screen_height = 800;
@@ -118,7 +122,7 @@ pub fn draw(state: *State) void {
         const start_point = spline.buffer[i];
         const end_point = spline.buffer[i + 1];
 
-        draw_line(real_x(&start_point), real_y(&start_point), real_x(&end_point), real_y(&end_point), 1, raylib.BLACK);
+        render.line(real_x(&start_point), real_y(&start_point), real_x(&end_point), real_y(&end_point), 1, raylib.BLACK);
     }
 
     // draw points
@@ -137,7 +141,7 @@ pub fn draw(state: *State) void {
         }
 
         const point = &spline.buffer[i];
-        draw_circle(real_x(point), real_y(point), point_radius, color);
+        render.circle(real_x(point), real_y(point), point_radius, color);
     }
 
     raylib.EndMode2D();
@@ -184,7 +188,7 @@ pub fn draw(state: *State) void {
             const selected_point = spline.buffer[state.se.editor_selected_point.?];
 
             const string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "point {{x: {d}, y: {d}}}", .{selected_point.x, selected_point.y}) catch unreachable;
-            draw_text(string, 20, screen_height - 50, 40, raylib.WHITE);
+            render.text(string, 20, screen_height - 50, 40, raylib.WHITE);
         }
     }
 
@@ -250,7 +254,7 @@ pub fn draw(state: *State) void {
         };
     }
 
-    _ = raygui.GuiTextBox(.{.x = screen_width - 350, .y = screen_height - 110, .width = 300, .height = 50}, state.se.text_input_buffer[0..], 64, true);
+    _ = render.text_input(state, screen_width - 350, screen_height - 110, 300, 50, state.se.text_input_buffer[0..], 30);
 
     if(raygui.GuiButton(.{.x = screen_width - 350, .y = screen_height - 60, .width = 300, .height = 50}, "export") != 0) {
         export_spline(state) catch |err| {
@@ -306,32 +310,4 @@ fn import_spline(state: *State) !Spline {
 
     const spline = std.mem.bytesToValue(Spline, buffer[0..size]);
     return spline;
-}
-
-fn draw_circle(x: f32, y: f32, radius: f32, color: raylib.Color) void {
-    raylib.DrawCircle(
-        @as(c_int, @intFromFloat(x)), 
-        @as(c_int, @intFromFloat(y)), 
-        radius, 
-        color
-    );
-}
-
-fn draw_line(start_x: f32, start_y: f32, end_x: f32, end_y: f32, THICKNESS: f32, color: raylib.Color) void {
-    raylib.DrawLineEx(
-        .{.x = start_x, .y = start_y},
-        .{.x = end_x, .y = end_y},
-        THICKNESS,
-        color
-    );
-}
-
-fn draw_text(text: []const u8, x: f32, y: f32, font_size: i32, color: raylib.Color) void {
-    raylib.DrawText(
-        &text[0],
-        @as(c_int, @intFromFloat(x)), 
-        @as(c_int, @intFromFloat(y)), 
-        @as(c_int, @intCast(font_size)), 
-        color
-    );
 }

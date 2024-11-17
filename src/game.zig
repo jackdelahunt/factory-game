@@ -4,6 +4,7 @@ const raylib = @cImport(@cInclude("raylib.h"));
 const raygui = @cImport(@cInclude("raygui.h"));
 const fastnoise = @import("fastnoise.zig");
 
+const render = @import("render.zig");
 const m = @import("main.zig");
 
 const State = m.State;
@@ -1469,15 +1470,15 @@ const UIIInventorySlot = struct {
     flags: u8,
 
     fn draw(self: *const Self, inventory_slot: *const InventorySlot, tint: raylib.Color, allocator: std.mem.Allocator) void {
-        draw_texture_tint(get_alt_texture(.item_slot), self.x, self.y, self.size, self.size, tint);
+        render.draw_texture_tint(get_alt_texture(.item_slot), self.x, self.y, self.size, self.size, tint);
 
         if(inventory_slot.item_type) |item| {                     
             const item_texture = item.get_texture();
-            draw_texture(item_texture, self.x, self.y, self.size, self.size);
+            render.draw_texture(item_texture, self.x, self.y, self.size, self.size);
             
             // max size is 99 so 2 bytes is fine here
             const string = std.fmt.allocPrintZ(allocator, "{}", .{inventory_slot.count}) catch unreachable;
-            draw_text(string, self.x, self.y, 20, raylib.WHITE);
+            render.text(string, self.x, self.y, 20, raylib.WHITE);
         }
     }
 
@@ -1963,12 +1964,12 @@ pub fn update(state: *State, delta_time: f32) void {
         // also min tick speed
         const tick_increment = 0.01;
 
-        if(state.input.left_arrow) {
+        if(state.key(raylib.KEY_LEFT) == .down) {
             state.time_per_tick -= tick_increment;
             std.debug.print("tick speed {d}\n", .{state.time_per_tick});
         }
 
-        if(state.input.right_arrow) {
+        if(state.key(raylib.KEY_RIGHT) == .down) {
             state.time_per_tick += tick_increment;
             std.debug.print("tick speed {d}\n", .{state.time_per_tick});
         }
@@ -1980,39 +1981,39 @@ pub fn update(state: *State, delta_time: f32) void {
 
     // basic input update
     {
-        if(state.input.t) {
+        if(state.key(raylib.KEY_T) == .down) {
             load_resources() catch |err| {
                 std.debug.panic("error when reloading textures during runtime: {}\n", .{err});
             };
         }
     
-        if(state.input.m) {
+        if(state.key(raylib.KEY_K) == .down) {
             debug_memory_usage = !debug_memory_usage;
         }
     
         // player update
-        if(state.input.w) {
+        if(state.key(raylib.KEY_W) == .pressing) {
             state.g.camera.target.y -= player_speed * delta_time;
         }
     
-        if(state.input.a) {
+        if(state.key(raylib.KEY_A) == .pressing) {
             state.g.camera.target.x -= player_speed * delta_time;
         }
     
-        if(state.input.s) {
+        if(state.key(raylib.KEY_S) == .pressing) {
             state.g.camera.target.y += player_speed * delta_time;
         }
     
-        if(state.input.d) {
+        if(state.key(raylib.KEY_D) == .pressing) {
             state.g.camera.target.x += player_speed * delta_time;
         }
 
         // ui controls
-        if(state.input.e) {
+        if(state.key(raylib.KEY_E) == .down) {
             close_inventory(state);
         }
     
-        if(state.input.r) {
+        if(state.key(raylib.KEY_R) == .down) {
             // only change direction if current slot is a tile
             // that can be placed and can be rotated
             const slot = state.g.player.get_selected_inventory_slot();
@@ -2045,11 +2046,11 @@ pub fn update(state: *State, delta_time: f32) void {
     // camera update
     {
         const zoom_amount = 0.2;
-        if(state.input.up_arrow) {
+        if(state.key(raylib.KEY_UP) == .down) {
             state.g.camera.zoom += state.g.camera.zoom * zoom_amount;
         }
     
-        if(state.input.down_arrow or (state.input.left_shift and state.input.scroll < 0)) {
+        if(state.key(raylib.KEY_DOWN) == .down) {
             state.g.camera.zoom -= state.g.camera.zoom * zoom_amount;
             if(state.g.camera.zoom <= 0.4) state.g.camera.zoom = 0.4;
         }
@@ -2313,7 +2314,7 @@ pub fn draw(state: *State) void {
         const world_position = tile_coords.to_world_position();
 
         const texture = state.g.background_tiles[i].get_default_texture();
-        draw_texture(texture, world_position.x, world_position.y, tile_width, tile_height);
+        render.draw_texture(texture, world_position.x, world_position.y, tile_width, tile_height);
     }
 
     // foreground tiles
@@ -2336,7 +2337,7 @@ pub fn draw(state: *State) void {
             rotated_position = move_draw_location_on_direction(world_position, forground_tile.direction);
         }
 
-        draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
+        render.draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
 
         special_belt_render: {
             if(forground_tile.tile == .belt) {
@@ -2374,7 +2375,7 @@ pub fn draw(state: *State) void {
                     };
 
                     const item_texture = slot.item.?.get_texture();
-                    draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
+                    render.draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
                 }
 
                 for(&belt.right_storage, 0..) |*slot, slot_index| {
@@ -2389,7 +2390,7 @@ pub fn draw(state: *State) void {
                     };
 
                     const item_texture = slot.item.?.get_texture();
-                    draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
+                    render.draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
                 }
             }
         }
@@ -2399,10 +2400,10 @@ pub fn draw(state: *State) void {
                 const node = get_network_node(state, i);
 
                 const id_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{node.network_id}) catch unreachable;
-                draw_text(id_string, world_position.x, world_position.y, 10, raylib.GREEN);
+                render.text(id_string, world_position.x, world_position.y, 10, raylib.GREEN);
 
                 const connections_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{node.neighbour_tile_indices.slice().len}) catch unreachable;
-                draw_text(connections_string, world_position.x, world_position.y + 10, 10, raylib.BLUE);
+                render.text(connections_string, world_position.x, world_position.y + 10, 10, raylib.BLUE);
             }
         }
     }
@@ -2413,7 +2414,7 @@ pub fn draw(state: *State) void {
             const node_world_position = get_tile_position_from_tile_index(node.tile_index).to_world_position();
             for(node.neighbour_tile_indices.slice()) |neighbour_tile_index| {
                 const neighbour_world_position = get_tile_position_from_tile_index(neighbour_tile_index).to_world_position();
-                draw_line(node_world_position.x, node_world_position.y, neighbour_world_position.x, neighbour_world_position.y, 1, raylib.RED);
+                render.line(node_world_position.x, node_world_position.y, neighbour_world_position.x, neighbour_world_position.y, 1, raylib.RED);
             }
         }
     }
@@ -2447,7 +2448,7 @@ pub fn draw(state: *State) void {
 
                 const direction = if(tile.has_direction()) state.g.player.placement_dirction else .down;
 
-                draw_texture_pro(tile.get_default_texture(), world_position.x, world_position.y, tile_width, tile_height, direction.get_rotation(), raylib.Fade(raylib.WHITE, 0.6), false);
+                render.draw_texture_pro(tile.get_default_texture(), world_position.x, world_position.y, tile_width, tile_height, direction.get_rotation(), raylib.Fade(raylib.WHITE, 0.6), false);
             }
         }
     }
@@ -2470,7 +2471,7 @@ pub fn draw(state: *State) void {
                 const background_height = 300;
                 const background_width = 400;
 
-                draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.BLACK, false);
+                render.draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.BLACK, false);
 
                 if(state.g.forground_tiles[miner_panel.tile_index].tile != .miner) {
                     close_inventory(state);
@@ -2497,7 +2498,7 @@ pub fn draw(state: *State) void {
             .furnace => {
                 const furnace_panel = &state.g.ui.furnace_panel;
 
-                draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.ORANGE, true);
+                render.draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.ORANGE, true);
 
                 if(state.g.forground_tiles[furnace_panel.tile_index].tile != .furnace) {
                     close_inventory(state);
@@ -2530,7 +2531,7 @@ pub fn draw(state: *State) void {
                 const background_height = 300;
                 const background_width = 400;
 
-                draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.WHITE, false);
+                render.draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.WHITE, false);
 
                 if(state.g.forground_tiles[crusher_panel.tile_index].tile != .crusher) {
                     close_inventory(state);
@@ -2568,30 +2569,30 @@ pub fn draw(state: *State) void {
             const icon_x = mouse_screen_position.x + 10;
             const icon_y = mouse_screen_position.y + 10;
 
-            draw_texture(item_texture, icon_x, icon_y, 50, 50);
+            render.draw_texture(item_texture, icon_x, icon_y, 50, 50);
 
             // max size is 99 so 2 bytes is fine here
             const string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{state.g.ui.in_hand.count}) catch unreachable;
-            draw_text(string, icon_x, icon_y, 20, raylib.WHITE);
+            render.text(string, icon_x, icon_y, 20, raylib.WHITE);
         }
     }
 
     // fps text
     {
         const fps_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "fps: {}", .{raylib.GetFPS()}) catch unreachable;
-        draw_text(fps_string, window_width() - 100, window_height() - 20, 20, raylib.WHITE);
+        render.text(fps_string, window_width() - 100, window_height() - 20, 20, raylib.WHITE);
     }
 
     // memory debug info
     if(debug_memory_usage) {
         const arena_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "A: {}", .{state.underlying_arena.queryCapacity()}) catch unreachable;
-        draw_text(arena_string, window_width() - 100, 20, 20, raylib.PURPLE);
+        render.text(arena_string, window_width() - 100, 20, 20, raylib.PURPLE);
 
         const scratch_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "S: {}", .{state.scratch_space.end_index}) catch unreachable;
-        draw_text(scratch_string, window_width() - 100, 40, 20, raylib.PURPLE);
+        render.text(scratch_string, window_width() - 100, 40, 20, raylib.PURPLE);
 
         const max_scratch_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "MS: {}", .{state.max_scratch_space_usage}) catch unreachable;
-        draw_text(max_scratch_string, window_width() - 100, 60, 20, raylib.PURPLE);
+        render.text(max_scratch_string, window_width() - 100, 60, 20, raylib.PURPLE);
     }
 
     // inventory
@@ -2627,7 +2628,7 @@ pub fn draw(state: *State) void {
                 const indicator_y = slot_y - 10;
                 const indicator_x = slot_x + (size * 0.5);
 
-                draw_circle(indicator_x, indicator_y, indicator_radius, raylib.YELLOW);
+                render.circle(indicator_x, indicator_y, indicator_radius, raylib.YELLOW);
             }
         }
     }
@@ -3110,95 +3111,23 @@ fn generate_world(state: *State) void {
 /////////////////////////////////////////////////////////////////////////////////
 ///                         @render
 ////////////////////////////////////////////////////////////////////////////////
-fn draw_rectangle(x: f32, y: f32, width: f32, height: f32, color: raylib.Color) void {
-    raylib.DrawRectangle(
-        @as(c_int, @intFromFloat(x)), 
-        @as(c_int, @intFromFloat(y)), 
-        @as(c_int, @intFromFloat(width)), 
-        @as(c_int, @intFromFloat(height)), 
-        color
-    );
-}
-
-fn draw_rectangle_gradient_vertical(x: f32, y: f32, width: f32, height: f32, start_color: raylib.Color, end_color: raylib.Color) void {
-    raylib.DrawRectangleGradientV(
-        @as(c_int, @intFromFloat(x)), 
-        @as(c_int, @intFromFloat(y)), 
-        @as(c_int, @intFromFloat(width)), 
-        @as(c_int, @intFromFloat(height)), 
-        start_color,
-        end_color
-    );
-}
-
-fn draw_circle(x: f32, y: f32, radius: f32, color: raylib.Color) void {
-    raylib.DrawCircle(
-        @as(c_int, @intFromFloat(x)), 
-        @as(c_int, @intFromFloat(y)), 
-        radius, 
-        color
-    );
-}
-
-fn draw_line(start_x: f32, start_y: f32, end_x: f32, end_y: f32, THICKNESS: f32, color: raylib.Color) void {
-    raylib.DrawLineEx(
-        .{.x = start_x, .y = start_y},
-        .{.x = end_x, .y = end_y},
-        THICKNESS,
-        color
-    );
-}
-
-fn draw_text(text: []const u8, x: f32, y: f32, font_size: i32, color: raylib.Color) void {
-    raylib.DrawText(
-        &text[0],
-        @as(c_int, @intFromFloat(x)), 
-        @as(c_int, @intFromFloat(y)), 
-        @as(c_int, @intCast(font_size)), 
-        color
-    );
-}
-
-inline fn draw_texture(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32) void {
-    draw_texture_tint(texture, x, y, width, height, raylib.WHITE);
-}
-
-inline fn draw_texture_tint(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, tint: raylib.Color) void {
-    draw_texture_pro(texture, x, y, width, height, 0, tint, false);
-}
-
-fn draw_texture_pro(texture: raylib.Texture, x: f32, y: f32, width: f32, height: f32, rotation: f32, tint: raylib.Color, centred: bool) void {
-    // Source rectangle (part of the texture to use for drawing)
-    const source_rectagle: raylib.Rectangle = .{ .x = 0, .y = 0, .width = @as(f32, @floatFromInt(texture.width)), .height = @as(f32, @floatFromInt(texture.height)) };
-
-    // Destination rectangle (screen rectangle where drawing part of texture)
-    var destination_rectangle: raylib.Rectangle = .{ .x = x, .y = y, .width = width, .height = height};
-
-    if(centred) {
-        destination_rectangle.x -= width / 2;
-        destination_rectangle.y -= height / 2;
-    }
-
-    raylib.DrawTexturePro(texture, source_rectagle, destination_rectangle, .{}, rotation, tint);
-}
-
 fn draw_inventory_slot(inventory_slot: *const InventorySlot, x: f32, y: f32, size: f32, tint: raylib.Color, allocator: std.mem.Allocator) void {
-    draw_texture_tint(get_alt_texture(.item_slot), x, y, size, size, tint);
+    render.draw_texture_tint(get_alt_texture(.item_slot), x, y, size, size, tint);
 
     if(inventory_slot.item_type) |item| {                     
         const item_texture = item.get_texture();
-        draw_texture(item_texture, x, y, size, size);
+        render.draw_texture(item_texture, x, y, size, size);
 
         const string = std.fmt.allocPrintZ(allocator, "{}", .{inventory_slot.count}) catch unreachable;
-        draw_text(string, x, y, 20, raylib.WHITE);
+        render.text(string, x, y, 20, raylib.WHITE);
     }
 }
 
 fn draw_crafting_recipe_output(recipe: *const CraftingRecipe, x: f32, y: f32, size: f32, tint: raylib.Color) void {
     const item_texture = recipe.output.item.get_texture();
 
-    draw_texture_tint(get_alt_texture(.item_slot), x, y, size, size, tint);
-    draw_texture(item_texture, x, y, size, size);
+    render.draw_texture_tint(get_alt_texture(.item_slot), x, y, size, size, tint);
+    render.draw_texture(item_texture, x, y, size, size);
 }
 
 fn draw_crafting_recipe_input(recipe: *const CraftingRecipe, x: f32, y: f32, size: f32) void {
@@ -3210,12 +3139,12 @@ fn draw_crafting_recipe_input(recipe: *const CraftingRecipe, x: f32, y: f32, siz
         const item_texture = input.item.get_texture();
         const input_x = x + (size * i) + (padding * i);
 
-        draw_texture_tint(get_alt_texture(.item_slot), input_x, y, size, size, raylib.BLUE);
-        draw_texture(item_texture, input_x, y, size, size);
+        render.draw_texture_tint(get_alt_texture(.item_slot), input_x, y, size, size, raylib.BLUE);
+        render.draw_texture(item_texture, input_x, y, size, size);
 
         var text_buffer = std.mem.zeroes([2]u8); 
         const string = std.fmt.bufPrint(text_buffer[0..], "{}", .{input.count}) catch unreachable;
-        draw_text(string, input_x, y, 20, raylib.WHITE);
+        render.text(string, input_x, y, 20, raylib.WHITE);
 
     }
 }
@@ -3226,7 +3155,7 @@ fn draw_progress_bar_vertical(x: f32, y: f32, width: f32, max_height: f32, start
     const progress_bar_start_y = progress_bar_end_y - (progress * max_height);
     const progress_bar_height = progress_bar_end_y - progress_bar_start_y;
 
-    draw_rectangle_gradient_vertical(x, progress_bar_start_y, width, progress_bar_height, end_color, start_color);
+    render.rectangle_gradient_vertical(x, progress_bar_start_y, width, progress_bar_height, end_color, start_color);
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -3289,7 +3218,7 @@ fn move_draw_location_on_direction(world_position: WorldPosition, direction: Dir
     return new_position;
 }
 
-fn get_mouse_screen_position() WorldPosition {
+pub fn get_mouse_screen_position() WorldPosition {
     const screen_position = raylib.GetMousePosition();
     return .{.x = screen_position.x, .y = screen_position.y};
 }

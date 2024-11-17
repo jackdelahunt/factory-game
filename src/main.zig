@@ -27,9 +27,9 @@ pub var splines: [24]Spline = undefined;
 
 // spline paths
 //
-const straight_belt_left_spline_path = "straight_belt_left.spline";
-const curved_belt_left_spline_path = "curved_belt_left.spline";
-const curved_belt_right_spline_path = "curved_belt_right.spline";
+const straight_belt_left_spline_path = "straight-belt-left.spline";
+const curved_belt_left_spline_path = "curved-belt-left.spline";
+const curved_belt_right_spline_path = "curved-belt-right.spline";
 
 // TILES
 var tile_textures: [16]raylib.Texture = .{undefined} ** 16;
@@ -69,27 +69,21 @@ pub const State = struct {
     var extractor_give_left = true;
 
     const Input = struct{
-        w: bool,
-        a: bool,
-        s: bool,
-        d: bool,
-        r: bool,
-        e: bool,
-        m: bool,
-        t: bool,
-        n: bool,
-        up_arrow: bool,
-        down_arrow: bool,
-        left_arrow: bool,
-        right_arrow: bool,
         numbers: [9]bool, // we ignore 0
         scroll: f32,
         left_mouse: bool,
         right_mouse: bool,
-        ctrl: bool,
         left_shift: bool,
     };
 
+    const KeyState = enum {
+        up,
+        down, 
+        pressing, 
+        released,
+    };
+
+    keyboard: [297]KeyState,
     input: Input,
     allocator: std.mem.Allocator,
     underlying_arena: *std.heap.ArenaAllocator,
@@ -108,6 +102,7 @@ pub const State = struct {
     // use the allocator field for actual allocation
     fn init(arena: *std.heap.ArenaAllocator, allocator: std.mem.Allocator) !State { 
         return Self { 
+            .keyboard = [_]State.KeyState{.up} ** 297,
             .input = std.mem.zeroes(State.Input),
             .allocator = allocator,
             .underlying_arena = arena,
@@ -130,7 +125,7 @@ pub const State = struct {
 
             self.get_input();
 
-            if(self.input.n) {
+            if(self.key(raylib.KEY_N) == .down and self.input.left_shift) {
                 self.current_state = switch (self.current_state) {
                     .game => .spline_editor,
                     .spline_editor => .game,
@@ -163,19 +158,20 @@ pub const State = struct {
     }
 
     fn get_input(self: *Self) void {
-        self.input.w = raylib.IsKeyDown(raylib.KEY_W);
-        self.input.a = raylib.IsKeyDown(raylib.KEY_A);
-        self.input.s = raylib.IsKeyDown(raylib.KEY_S);
-        self.input.d = raylib.IsKeyDown(raylib.KEY_D);
-        self.input.r = raylib.IsKeyPressed(raylib.KEY_R);
-        self.input.e = raylib.IsKeyPressed(raylib.KEY_E);
-        self.input.m = raylib.IsKeyPressed(raylib.KEY_M);
-        self.input.t = raylib.IsKeyPressed(raylib.KEY_T);
-        self.input.n = raylib.IsKeyPressed(raylib.KEY_N);
-        self.input.up_arrow = raylib.IsKeyPressed(raylib.KEY_UP);
-        self.input.down_arrow = raylib.IsKeyPressed(raylib.KEY_DOWN);
-        self.input.left_arrow = raylib.IsKeyPressed(raylib.KEY_LEFT);
-        self.input.right_arrow = raylib.IsKeyPressed(raylib.KEY_RIGHT);
+        for(&self.keyboard, 0..) |_, i| {
+            if(raylib.IsKeyDown(@intCast(i))) {
+                if(raylib.IsKeyPressed(@intCast(i))) {
+                    self.keyboard[i] = .down;
+                } else {
+                    self.keyboard[i] = .pressing;
+                }
+            } else if(raylib.IsKeyReleased(@intCast(i))) {
+                self.keyboard[i] = .released;
+            } else {
+                self.keyboard[i] = .up;
+            }
+        }
+
         self.input.numbers[0] = raylib.IsKeyDown(raylib.KEY_ONE);
         self.input.numbers[1] = raylib.IsKeyDown(raylib.KEY_TWO);
         self.input.numbers[2] = raylib.IsKeyDown(raylib.KEY_THREE);
@@ -189,12 +185,15 @@ pub const State = struct {
         self.input.right_mouse = raylib.IsMouseButtonPressed(1);
         self.input.left_mouse = raylib.IsMouseButtonPressed(0);
         self.input.left_mouse = raylib.IsMouseButtonPressed(0);
-        self.input.ctrl = raylib.IsKeyDown(raylib.KEY_LEFT_CONTROL);
         self.input.left_shift = raylib.IsKeyDown(raylib.KEY_LEFT_SHIFT);
     }
 
     pub fn tick(self: *const Self) bool {
         return self.tick_timer >= self.time_per_tick;
+    }
+
+    pub fn key(self: *const Self, k: c_int) Self.KeyState {
+        return self.keyboard[@intCast(k)];
     }
 };
 
