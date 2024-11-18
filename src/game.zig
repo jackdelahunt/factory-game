@@ -32,6 +32,9 @@ var debug_memory_usage = false; // toggled with m
 
 const max_item_stack = 99;
 
+/////////////////////////////////////////////////////////////////////////////////
+///                         @state
+/////////////////////////////////////////////////////////////////////////////////
 pub const GameState = struct {
     const Self = @This();
 
@@ -1036,10 +1039,10 @@ const Tile = enum(u8) {
                 const last_left_slot = belt.last_left_slot();
                 const last_right_slot = belt.last_right_slot();
 
-                if(last_left_slot.is_complete()) {
+                if(!last_left_slot.is_empty()) {
                     item = last_left_slot.item;
                     last_left_slot.clear();
-                } else if(last_right_slot.is_complete()) {
+                } else if(!last_right_slot.is_empty()) {
                     item = last_right_slot.item;
                     last_right_slot.clear();
                 }
@@ -1582,13 +1585,13 @@ const UI = struct {
         // furnace panel init
         {
             const slot_size = 50;
-            
-            const input_fuel_slot_x = (window_width() * 0.5) - 100 - (slot_size * 0.5);
-            const input_ingredient_slot_x = (window_width() * 0.5) - (slot_size * 0.5);
-            const output_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
+
+            const input_fuel_slot_x = (window_width() * 0.5) + 80 - (slot_size * 0.5);
+            const input_ingredient_slot_x = input_fuel_slot_x + slot_size + 5;
+            const output_slot_x = (window_width() * 0.5) + 300 - (slot_size * 0.5);
     
             const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
-
+    
             ui.furnace_panel =.{
                 .tile_index = 0,
                 .input_fuel_slot = .{
@@ -1957,6 +1960,18 @@ pub fn update(state: *State, delta_time: f32) void {
     if(state.tick()) {
         power_update(state);
         tick_update(state);
+    }
+
+    if(state.key(raylib.KEY_L) == .down) {
+        if(state.input.left_shift) {
+            load_game_data(state) catch |err| {
+                std.debug.print("error loading game data{any}\n", .{err});
+            };
+        } else {
+            dump_game_data(state) catch |err| {
+                std.debug.print("error dumping game data{any}\n", .{err});
+            };
+        }
     }
 
     // tick changing update
@@ -2498,12 +2513,15 @@ pub fn draw(state: *State) void {
             .furnace => {
                 const furnace_panel = &state.g.ui.furnace_panel;
 
-                render.draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, window_height() * 0.5, 400, 250, 0, raylib.ORANGE, true);
-
                 if(state.g.forground_tiles[furnace_panel.tile_index].tile != .furnace) {
                     close_inventory(state);
                     break :game_ui_drawing;
                 }
+
+                const background_height = 300;
+                const background_width = 400;
+
+                render.draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - background_height / 2, background_width, background_height, 0, raylib.ORANGE, false); 
 
                 const furnace = &get_tile_data(state, furnace_panel.tile_index).data.furnace;
 
@@ -3227,4 +3245,132 @@ fn get_tile_position_from_tile_index(tile_index: usize) TilePosition {
         const x = @mod(tile_index, world_tile_width);
         const y = @divFloor(tile_index, world_tile_width); 
         return .{.x = x, .y = y};
+}
+
+fn dump_game_data(state: *State) !void {
+    const buffer_size = 
+        @sizeOf(raylib.Camera2D) +
+        @sizeOf(Player) +
+        @sizeOf(ForgroundTile) * state.g.forground_tiles.len +
+        @sizeOf(TileData) * state.g.tile_data.items.len +
+        @sizeOf(Network) * state.g.networks.items.len +
+        @sizeOf(NetworkNode) * state.g.network_nodes.items.len +
+        @sizeOf(usize) * 3
+    ;
+
+    var write_index: usize = 0;
+    const buffer = try state.allocator.alloc(u8, buffer_size);
+
+    std.mem.copyForwards(u8, buffer, &std.mem.toBytes(state.g.camera));
+    write_index += @sizeOf(raylib.Camera2D);
+
+    std.mem.copyForwards(u8, buffer[write_index..], &std.mem.toBytes(state.g.player));
+    write_index += @sizeOf(Player);
+
+    for(state.g.forground_tiles) |tile| {
+        std.mem.copyForwards(u8, buffer[write_index..], &std.mem.toBytes(tile));
+        write_index += @sizeOf(ForgroundTile);
+    }
+
+    std.mem.copyForwards(u8, buffer[write_index..], &std.mem.toBytes(state.g.tile_data.items.len));
+    write_index += @sizeOf(usize);
+
+    for(state.g.tile_data.items) |*tile_data| {
+        std.mem.copyForwards(u8, buffer[write_index..], &std.mem.toBytes(tile_data.*));
+        write_index += @sizeOf(TileData);
+    }
+
+    std.mem.copyForwards(u8, buffer[write_index..], &std.mem.toBytes(state.g.networks.items.len));
+    write_index += @sizeOf(usize);
+
+    for(state.g.networks.items) |*network| {
+        std.mem.copyForwards(u8, buffer[write_index..], &std.mem.toBytes(network.*));
+        write_index += @sizeOf(Network);
+    }
+
+    std.mem.copyForwards(u8, buffer[write_index..], &std.mem.toBytes(state.g.network_nodes.items.len));
+    write_index += @sizeOf(usize);
+
+    for(state.g.network_nodes.items) |*network_node| {
+        std.mem.copyForwards(u8, buffer[write_index..], &std.mem.toBytes(network_node.*));
+        write_index += @sizeOf(NetworkNode);
+    }
+
+    const file = try std.fs.cwd().createFile("level.dat", .{});
+    try file.writeAll(buffer);
+ 
+    std.debug.print("{s}\n", .{buffer});
+}
+
+fn load_game_data(state: *State) !void {
+    const buffer = try std.fs.cwd().readFileAlloc(state.scratch_space.allocator(), "level.dat", state.scratch_space.buffer.len - state.scratch_space.end_index);
+    var read_index: usize = 0;
+
+    // camera
+    {
+        std.mem.copyForwards(u8, std.mem.asBytes(&state.g.camera), buffer[read_index..read_index + @sizeOf(raylib.Camera2D)]);
+        read_index += @sizeOf(raylib.Camera2D);
+    }
+
+    // player
+    {
+        std.mem.copyForwards(u8, std.mem.asBytes(&state.g.player), buffer[read_index..read_index + @sizeOf(Player)]);
+        read_index += @sizeOf(Player);
+    }
+
+    // forground tiles
+    {
+        for(state.g.forground_tiles) |*tile| {
+            std.mem.copyForwards(u8, std.mem.asBytes(tile), buffer[read_index..read_index + @sizeOf(ForgroundTile)]);
+            read_index += @sizeOf(ForgroundTile);
+        }
+    }
+
+    // tile data
+    {
+        var new_tile_data_len: usize = 0;
+        std.mem.copyForwards(u8, std.mem.asBytes(&new_tile_data_len), buffer[read_index..read_index + @sizeOf(usize)]);
+        read_index += @sizeOf(usize);
+    
+        if(new_tile_data_len > state.g.tile_data.items.len) {
+            try state.g.tile_data.resize(new_tile_data_len);
+        }
+    
+        for(state.g.tile_data.items, 0..new_tile_data_len) |*tile_data, _| {
+            std.mem.copyForwards(u8, std.mem.asBytes(tile_data), buffer[read_index..read_index + @sizeOf(TileData)]);
+            read_index += @sizeOf(TileData);
+        }
+    }
+
+    // networks
+    {
+        var new_networks_len: usize = 0;
+        std.mem.copyForwards(u8, std.mem.asBytes(&new_networks_len), buffer[read_index..read_index + @sizeOf(usize)]);
+        read_index += @sizeOf(usize);
+    
+        if(new_networks_len > state.g.networks.items.len) {
+            try state.g.networks.resize(new_networks_len);
+        }
+    
+        for(state.g.networks.items, 0..new_networks_len) |*network, _| {
+            std.mem.copyForwards(u8, std.mem.asBytes(network), buffer[read_index..read_index + @sizeOf(Network)]);
+            read_index += @sizeOf(Network);
+        }
+    }
+
+    // network nodes
+    {
+        var new_nodes_len: usize = 0;
+        std.mem.copyForwards(u8, std.mem.asBytes(&new_nodes_len), buffer[read_index..read_index + @sizeOf(usize)]);
+        read_index += @sizeOf(usize);
+    
+        if(new_nodes_len > state.g.network_nodes.items.len) {
+            try state.g.network_nodes.resize(new_nodes_len);
+        }
+    
+        for(state.g.network_nodes.items, 0..new_nodes_len) |*node, _| {
+            std.mem.copyForwards(u8, std.mem.asBytes(node), buffer[read_index..read_index + @sizeOf(NetworkNode)]);
+            read_index += @sizeOf(NetworkNode);
+        }
+    }
 }
