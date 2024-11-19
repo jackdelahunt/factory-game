@@ -70,7 +70,10 @@ pub const GameState = struct {
                 .zoom = 3.5,
             },
             .player = Player{
-                .inventory = std.mem.zeroes([player_inventory_size]InventorySlot),
+                // weird init style but first 9 slots give only placable flags and the rest nothing
+                .inventory = 
+                    [_]InventorySlot{.{.item = null, .count = 0, .flags = InventorySlot.only_placeable_flag}} ** player_inventory_width ++
+                    [_]InventorySlot{.{.item = null, .count = 0, .flags = 0}} ** (player_inventory_size - player_inventory_width),
                 .selected_item = 0,
                 .placement_dirction = .down,
             },
@@ -95,19 +98,20 @@ pub const GameState = struct {
         };
 
         // temp adding items to inventory 
-        self.player.inventory[0] = .{ .item_type = .miner, .count = 99 };
-        self.player.inventory[1] = .{ .item_type = .extractor, .count = 99 };
-        self.player.inventory[2] = .{ .item_type = .belt, .count = 99 };
-        self.player.inventory[3] = .{ .item_type = .pipe_merger, .count = 99 };
-        self.player.inventory[4] = .{ .item_type = .crusher, .count = 99 };
-        self.player.inventory[6] = .{ .item_type = .furnace, .count = 99 };
-        self.player.inventory[7] = .{ .item_type = .pole, .count = 99 };
-        self.player.inventory[8] = .{ .item_type = .battery, .count = 99 };
-    
-        self.player.inventory[9] = .{ .item_type = .coal, .count = 99 };
-        self.player.inventory[10] = .{ .item_type = .coal, .count = 99 };
-        self.player.inventory[11] = .{ .item_type = .coal, .count = 99 };
-        self.player.inventory[12] = .{ .item_type = .iron, .count = 99 };
+        self.player.inventory[0].item = .miner;         self.player.inventory[0].count = 99;
+        self.player.inventory[1].item = .extractor;     self.player.inventory[1].count = 99;
+        self.player.inventory[2].item = .belt;          self.player.inventory[2].count = 99;
+        self.player.inventory[3].item = .pipe_merger;   self.player.inventory[3].count = 99;
+        self.player.inventory[4].item = .crusher;       self.player.inventory[4].count = 99;
+        self.player.inventory[5].item = .furnace;       self.player.inventory[5].count = 99;
+        self.player.inventory[6].item = .pole;          self.player.inventory[6].count = 99;
+        self.player.inventory[7].item = .battery;       self.player.inventory[7].count = 99;
+        self.player.inventory[10].item = .coal;         self.player.inventory[10].count = 99;
+        self.player.inventory[11].item = .coal;         self.player.inventory[11].count = 99;
+        self.player.inventory[12].item = .coal;         self.player.inventory[12].count = 99;
+        self.player.inventory[13].item = .coal;         self.player.inventory[13].count = 99;
+        self.player.inventory[14].item = .coal;         self.player.inventory[14].count = 99;
+        self.player.inventory[15].item = .coal;         self.player.inventory[15].count = 99;
 
         return self;
     }
@@ -722,8 +726,8 @@ const Tile = enum(u8) {
                     }
     
                     if(miner.fuel_buffer == 0 and !miner.input.is_empty()) {
-                        miner.fuel_buffer = miner.input.item_type.?.fuel_smelt_count().? * Tile.miner_max_progress;
-                        miner.fuel_item_in_use = miner.input.item_type;
+                        miner.fuel_buffer = miner.input.item.?.fuel_smelt_count().? * Tile.miner_max_progress;
+                        miner.fuel_item_in_use = miner.input.item;
                         _ = miner.input.take_amount(1);
                     }
     
@@ -735,7 +739,7 @@ const Tile = enum(u8) {
     
                             const tile = state.g.background_tiles[tile_index];
                             const item = tile.item_when_mined() orelse unreachable; // if this failed there was a logic error before
-                            miner.output.item_type = item;
+                            miner.output.item = item;
                             miner.output.count += 1;
                         }
                     }
@@ -744,7 +748,7 @@ const Tile = enum(u8) {
             .furnace => {
                 var furnace = &tile_data.?.data.furnace;
                 if(furnace.ingredient_input.is_empty()) return;
-                if(furnace.output.item_type != null and furnace.ingredient_input.item_type.?.item_when_smelted() != furnace.output.item_type) return;
+                if(furnace.output.item != null and furnace.ingredient_input.item.?.item_when_smelted() != furnace.output.item) return;
 
                 if(furnace.fuel_buffer == 0) {
                     furnace.fuel_item_in_use = null;
@@ -752,8 +756,8 @@ const Tile = enum(u8) {
                 }
 
                 if(furnace.fuel_buffer == 0 and !furnace.fuel_input.is_empty()) {
-                    furnace.fuel_buffer += furnace.fuel_input.item_type.?.fuel_smelt_count().? * Tile.furnace_max_progress;
-                    furnace.fuel_item_in_use = furnace.fuel_input.item_type;
+                    furnace.fuel_buffer += furnace.fuel_input.item.?.fuel_smelt_count().? * Tile.furnace_max_progress;
+                    furnace.fuel_item_in_use = furnace.fuel_input.item;
                     _ = furnace.fuel_input.take_amount(1);
                 }
 
@@ -763,8 +767,8 @@ const Tile = enum(u8) {
                     if(furnace.progress >= Tile.furnace_max_progress) {
                         furnace.progress = 0;
 
-                        const output_item = furnace.ingredient_input.item_type.?.item_when_smelted();
-                        furnace.output.item_type = output_item;
+                        const output_item = furnace.ingredient_input.item.?.item_when_smelted();
+                        furnace.output.item = output_item;
                         furnace.output.count += 1;
 
                         _ = furnace.ingredient_input.take_amount(1);
@@ -778,14 +782,12 @@ const Tile = enum(u8) {
                     std.debug.assert(belt.left_storage.len == belt.right_storage.len);
 
                     for(0..belt.left_storage.len) |slot_number| {
-                        const left_slot = &belt.left_storage[slot_number];
-                        if(left_slot.item != null and left_slot.progress < belt_max_progress) {
-                            left_slot.progress += 1;
+                        if(!belt.left_storage[slot_number].is_empty() and  belt.left_progress[slot_number] < belt_max_progress) {
+                            belt.left_progress[slot_number] += 1;
                         }
 
-                        const right_slot = &belt.right_storage[slot_number];
-                        if(right_slot.item != null and right_slot.progress < belt_max_progress) {
-                            right_slot.progress += 1;
+                        if(!belt.right_storage[slot_number].is_empty() and  belt.right_progress[slot_number] < belt_max_progress) {
+                            belt.right_progress[slot_number] += 1;
                         }
                     }
                 }
@@ -813,21 +815,20 @@ const Tile = enum(u8) {
 
                     // try and give from left and right storage last slot
                     const last_left_slot = belt.last_left_slot();
-                    if(last_left_slot.item) |item| {
 
-                        if(last_left_slot.progress >= Tile.belt_max_progress) {
+                    if(last_left_slot.item) |item| {
+                        if(belt.last_left_progress() >= Tile.belt_max_progress) {
                             if(output_tile.belt_give(item, tile_index, true, output_index, output_tile_data, state)) {
-                                belt.clear_last_left_slot(); 
+                                _ = last_left_slot.clear(); 
                             }
                         }
                     }
 
                     const last_right_slot = belt.last_right_slot();
                     if(last_right_slot.item) |item| {
-
-                        if(last_right_slot.progress >= Tile.belt_max_progress) {
+                        if(belt.last_right_progress() >= Tile.belt_max_progress) {
                             if(output_tile.belt_give(item, tile_index, false, output_index, output_tile_data, state)) {
-                                belt.clear_last_right_slot(); 
+                                _ = last_right_slot.clear(); 
                             }
                         }
                     }
@@ -841,22 +842,26 @@ const Tile = enum(u8) {
                     // slot is empty then move it up by one if max progress
                     for(0..belt.left_storage.len - 1) |slot_number| {
                         const left_slot = &belt.left_storage[slot_number];
-                        if(left_slot.is_complete()) {
+                        const left_progress = belt.left_progress[slot_number];
+
+                        if(left_progress >= belt_max_progress) {
                             if(belt.left_storage[slot_number + 1].is_empty()) {
                                 belt.left_storage[slot_number + 1].item = left_slot.item;
-                                belt.left_storage[slot_number + 1].progress = 0;
+                                belt.left_progress[slot_number + 1] = 0;
 
-                                left_slot.clear();
+                                _ = left_slot.clear();
                             }
                         }
 
                         const right_slot = &belt.right_storage[slot_number];
-                        if(right_slot.is_complete()) {
+                        const right_progress = belt.right_progress[slot_number];
+
+                        if(right_progress >= belt_max_progress) {
                             if(belt.right_storage[slot_number + 1].is_empty()) {
                                 belt.right_storage[slot_number + 1].item = right_slot.item;
-                                belt.right_storage[slot_number + 1].progress = 0;
+                                belt.right_progress[slot_number + 1] = 0;
 
-                                right_slot.clear();
+                                _ = right_slot.clear();
                             }
                         }
                     }
@@ -920,6 +925,7 @@ const Tile = enum(u8) {
             },
             .extractor => {
                 const extractor = &tile_data.?.data.extractor;
+                _ = extractor; // autofix
 
                 const current_position = get_tile_position_from_tile_index(tile_index);
                 if(!current_position.is_valid()) {
@@ -929,52 +935,87 @@ const Tile = enum(u8) {
                 const input_direction = state.g.forground_tiles[tile_index].direction;
                 const output_direction = input_direction.oppisite();
 
-                // check to take item
-                check_input: {
-                    if(extractor.item != null) {
-                        break :check_input;
-                    }
+                var input_slots: [2]?*InventorySlot = .{null, null};
+                var output_slots: [2]?*InventorySlot = .{null, null};
 
+                get_input_slot: {
                     const input_position = current_position.get_adjacent_tile_at_direction(input_direction);
                     if(!input_position.is_valid()) {
-                        break :check_input;
+                        break :get_input_slot;
                     }
 
                     const input_index = input_position.get_tile_index();
                     const input_tile = state.g.forground_tiles[input_index].tile;
                     
                     if(!input_tile.extractor_can_take()) {
-                        break :check_input;
+                        break :get_input_slot;
                     }
 
-                    var input_tile_data: ?*TileData = null;  
-                    if(input_tile.has_tile_data()) {
-                        input_tile_data = get_tile_data(state, input_index);
-                    }
-
-                    const input_item = input_tile.extractor_take(input_index, input_tile_data, state);
-                    extractor.item = input_item;
+                    input_slots = input_tile.get_output_slots_for_extractor(input_index, state);
                 }
 
-                check_output: {
-                    if(extractor.item == null) {
-                        break :check_output;
-                    }
-
+                get_output_slot: {
                     const output_position = current_position.get_adjacent_tile_at_direction(output_direction);
                     if(!output_position.is_valid()) {
-                        break :check_output;
+                        break :get_output_slot;
                     }
 
                     const output_index = output_position.get_tile_index();
                     const output_tile = state.g.forground_tiles[output_index].tile;
                     
                     if(!output_tile.extractor_can_give()) {
-                        break :check_output;
+                        break :get_output_slot;
                     }
 
-                    if(output_tile.extractor_give(extractor.item.?, tile_index, output_index, state)) {
-                        extractor.item = null;
+                    output_slots = output_tile.get_input_slots_for_extractor(output_index, tile_index, state); 
+                }
+
+                // move items from output to input
+                {
+                    for(0..output_slots.len) |out_index| {
+                        if(output_slots[out_index] == null) {
+                            continue;
+                        }
+
+                        const output_slot = output_slots[out_index].?;
+                        
+                        if(output_slot.is_full()) {
+                            continue;
+                        }
+
+                        if(output_slot.count >= Tile.extractor_to_slot_count_cutoff) {
+                            continue;
+                        }
+
+                        for(0..input_slots.len) |in_index| {
+                            if(input_slots[in_index] == null) {
+                                continue;
+                            }
+
+                            const input_slot = input_slots[in_index].?;
+
+                            if(input_slot.is_empty()) {
+                                continue;
+                            }
+
+                            if(!output_slot.is_compatible(input_slot.item.?)) {
+                                continue;
+                            }
+                            
+                            if(output_slot.has_flag(InventorySlot.only_smeltable_flag) and !input_slot.item.?.can_be_smelted()) {
+                                continue;
+                            }
+
+                            if(output_slot.has_flag(InventorySlot.only_fuel_flag) and !input_slot.item.?.can_be_fuel()) {
+                                continue;
+                            }
+
+                            output_slot.count += 1;
+                            output_slot.item = input_slot.item;
+
+                            _ = input_slot.take_amount(1);
+                            break;
+                        }
                     }
                 }
             },
@@ -984,7 +1025,7 @@ const Tile = enum(u8) {
                 var network = get_network(state, node.network_id);
 
 
-                { // mining logic
+                { // crushing logic
                     if(crusher.input.is_empty() or !network.consume_power(20)) {
                         crusher.progress = 0;
                         return;
@@ -994,8 +1035,8 @@ const Tile = enum(u8) {
                         if(crusher.progress >= Tile.crusher_max_progress) {
                             crusher.progress = 0;
     
-                            const item = crusher.input.item_type.?.item_when_crushed() orelse unreachable;
-                            crusher.output.item_type = item;
+                            const item = crusher.input.item.?.item_when_crushed() orelse unreachable;
+                            crusher.output.item = item;
                             crusher.output.count += 1;
 
                             _ = crusher.input.take_amount(1);
@@ -1027,7 +1068,7 @@ const Tile = enum(u8) {
                     return null;
                 }
 
-                const output_item = miner.output.item_type;
+                const output_item = miner.output.item;
                 _ = miner.output.take_amount(1);
                 return output_item;
             },
@@ -1041,10 +1082,10 @@ const Tile = enum(u8) {
 
                 if(!last_left_slot.is_empty()) {
                     item = last_left_slot.item;
-                    last_left_slot.clear();
+                    _ = last_left_slot.clear();
                 } else if(!last_right_slot.is_empty()) {
                     item = last_right_slot.item;
-                    last_right_slot.clear();
+                    _ = last_right_slot.clear();
                 }
 
                 return item;
@@ -1055,43 +1096,19 @@ const Tile = enum(u8) {
         }
     }
 
-    fn extractor_give(self: Self, item: Item, from_index: usize, tile_index: usize, state: *const State) bool {
+    fn get_input_slots_for_extractor(self: Self, tile_index: usize, from_index: usize, state: *const State) [2]?*InventorySlot {
         switch (self) {
             .miner => {
                 const miner = &get_tile_data(state, tile_index).data.miner;
-
-                if(!item.can_be_fuel() or miner.input.is_full()) {
-                    return false;
-                }
-
-                if(miner.input.item_type == null or miner.input.item_type.? == item) {
-                    miner.input.count += 1;
-                    miner.input.item_type = item;
-                    return true;
-                }
-
-                return false;
+                return .{&miner.input, null};
             },
             .furnace => {
                 const furnace = &get_tile_data(state, tile_index).data.furnace;
-
-                if(item.can_be_fuel()) {
-                    if(!furnace.fuel_input.is_full() and furnace.fuel_input.is_compatible(item)) {
-                        furnace.fuel_input.count += 1;
-                        furnace.fuel_input.item_type = item;
-                        return true;
-                    }
-                }
-
-                if(item.can_be_smelted()) {
-                    if(!furnace.ingredient_input.is_full() and furnace.ingredient_input.is_compatible(item)) {
-                        furnace.ingredient_input.count += 1;
-                        furnace.ingredient_input.item_type = item;
-                        return true;
-                    }
-                }
-
-                return false;
+                return .{&furnace.fuel_input, &furnace.ingredient_input};
+            },
+            .crusher => {
+                const crusher = &get_tile_data(state, tile_index).data.crusher;
+                return .{&crusher.input, null};
             },
             .belt => {
                 const belt = &get_tile_data(state, tile_index).data.belt;
@@ -1108,12 +1125,32 @@ const Tile = enum(u8) {
                     .down, .left => &belt.left_storage[0],
                 };
 
-                if(target_storage_slot.item == null) {
-                    target_storage_slot.item = item;
-                    return true;
-                }
-                    
-                return false;
+                return .{target_storage_slot, null};
+            },
+            else => {
+                unreachable;
+            }
+        }
+    }
+
+    fn get_output_slots_for_extractor(self: Self, tile_index: usize, state: *const State) [2]?*InventorySlot {
+        switch (self) {
+            .miner => {
+                const miner = &get_tile_data(state, tile_index).data.miner;
+                return .{&miner.output, null};
+            },
+            .furnace => {
+                const furnace = &get_tile_data(state, tile_index).data.furnace;
+                return .{&furnace.output, null};
+
+            },
+            .crusher => {
+                const crusher = &get_tile_data(state, tile_index).data.crusher;
+                return .{&crusher.output, null};
+            },
+            .belt => {
+                const belt = &get_tile_data(state, tile_index).data.belt;
+                return .{belt.last_left_slot(), belt.last_right_slot()};
             },
             else => {
                 unreachable;
@@ -1193,12 +1230,14 @@ const Tile = enum(u8) {
                 .data = .{
                     .miner = .{
                         .input = InventorySlot{
-                            .item_type = null,
+                            .item = null,
                             .count = 0,
+                            .flags = InventorySlot.only_fuel_flag
                         },
                         .output = InventorySlot{
-                            .item_type = null,
+                            .item = null,
                             .count = 0,
+                            .flags = InventorySlot.only_take_flag,
                         },
                         .fuel_item_in_use = null,
                         .progress = 0,
@@ -1212,16 +1251,19 @@ const Tile = enum(u8) {
                 .data = .{
                     .furnace = .{
                         .fuel_input = InventorySlot{
-                            .item_type = null,
+                            .item = null,
                             .count = 0,
+                            .flags = InventorySlot.only_fuel_flag
                         },
                         .ingredient_input = InventorySlot{
-                            .item_type = null,
+                            .item = null,
                             .count = 0,
+                            .flags = InventorySlot.only_smeltable_flag
                         },
                         .output = InventorySlot{
-                            .item_type = null,
+                            .item = null,
                             .count = 0,
+                            .flags = InventorySlot.only_take_flag
                         },
                         .fuel_item_in_use = null,
                         .progress = 0,
@@ -1233,8 +1275,10 @@ const Tile = enum(u8) {
                 .tile_index = 0,
                 .data = .{
                     .belt = .{
-                        .right_storage = std.mem.zeroes([5]BeltStorageSlot),
-                        .left_storage =  std.mem.zeroes([5]BeltStorageSlot),
+                        .right_storage = [_]InventorySlot{.{.item = null, .count = 0, .flags = 0}} ** 5,
+                        .left_storage =  [_]InventorySlot{.{.item = null, .count = 0, .flags = 0}} ** 5,
+                        .left_progress = std.mem.zeroes([5]usize),
+                        .right_progress = std.mem.zeroes([5]usize),
                         .relative_output_direction = .up,
                     },
                 },
@@ -1261,12 +1305,14 @@ const Tile = enum(u8) {
                 .data = .{
                     .crusher =.{
                         .input = InventorySlot{
-                            .item_type = null,
+                            .item = null,
                             .count = 0,
+                            .flags = 0,
                         },
                         .output = InventorySlot{
-                            .item_type = null,
+                            .item = null,
                             .count = 0,
+                            .flags = InventorySlot.only_take_flag,
                         },
                         .progress = 0,
                     },
@@ -1317,27 +1363,26 @@ const TileData = struct {
             }
         },
         belt: struct{
-            left_storage: [5]BeltStorageSlot,
-            right_storage: [5]BeltStorageSlot,
+            left_storage: [5]InventorySlot,
+            right_storage: [5]InventorySlot,
+            left_progress: [5]usize,
+            right_progress: [5]usize,
             relative_output_direction: Direction,
 
-            fn last_left_slot(self: *@This()) *BeltStorageSlot {
+            fn last_left_slot(self: *@This()) *InventorySlot {
                 return &self.left_storage[self.left_storage.len - 1];
             }
 
-            fn last_right_slot(self: *@This()) *BeltStorageSlot {
+            fn last_right_slot(self: *@This()) *InventorySlot {
                 return &self.right_storage[self.right_storage.len - 1];
             }
 
-            fn clear_last_left_slot(self: *@This()) void {
-                self.left_storage[self.left_storage.len - 1].item = null;
-                self.left_storage[self.left_storage.len - 1].progress = 0;
+            fn last_left_progress(self: *@This()) usize {
+                return self.left_progress[self.left_storage.len - 1];
             }
 
-            fn clear_last_right_slot(self: *@This()) void {
-                self.right_storage[self.right_storage.len - 1].item = null;
-                self.right_storage[self.right_storage.len - 1].progress = 0;
-
+            fn last_right_progress(self: *@This()) usize {
+                return self.right_progress[self.right_storage.len - 1];
             }
         },
         extractor: struct {
@@ -1475,7 +1520,7 @@ const UIIInventorySlot = struct {
     fn draw(self: *const Self, inventory_slot: *const InventorySlot, tint: raylib.Color, allocator: std.mem.Allocator) void {
         render.draw_texture_tint(get_alt_texture(.item_slot), self.x, self.y, self.size, self.size, tint);
 
-        if(inventory_slot.item_type) |item| {                     
+        if(inventory_slot.item) |item| {                     
             const item_texture = item.get_texture();
             render.draw_texture(item_texture, self.x, self.y, self.size, self.size);
             
@@ -1527,8 +1572,9 @@ const UI = struct {
         var ui: Self = undefined;
 
         ui.in_hand = InventorySlot{
-            .item_type = null,
-            .count = 0
+            .item = null,
+            .count = 0,
+            .flags = 0,
         };
 
         // player inventory panel init
@@ -1691,10 +1737,17 @@ fn is_viewing_inventory(state: *const State) bool {
 ///                         @inventory
 /////////////////////////////////////////////////////////////////////////////////
 const InventorySlot = struct {
+    const only_smeltable_flag: u8     = 0b00000001;
+    const only_fuel_flag: u8          = 0b00000010;
+    const only_take_flag: u8          = 0b00000100;
+    const only_placeable_flag: u8     = 0b00001000;
+    const only_crushable_flag: u8     = 0b00010000;
+
     const Self = @This();
 
-    item_type: ?Item,
+    item: ?Item,
     count: usize,
+    flags: u8,
 
     // takes the given amount from the slot
     // if there is not enough then the slot is
@@ -1705,7 +1758,7 @@ const InventorySlot = struct {
         self.count -= amount_taken;
 
         if(self.count == 0) {
-            self.item_type = null;
+            self.item = null;
         }
 
         return amount_taken;
@@ -1715,30 +1768,30 @@ const InventorySlot = struct {
     // checks need to be done before this to
     // make sure no items or lost
     fn move_items_to(self: *Self, other: *Self) void {
-        if(self.item_type == null) {
+        if(self.item == null) {
             return;
         }
 
-        if(other.item_type != null and self.item_type != other.item_type) {
+        if(other.item != null and self.item != other.item) {
             return;
         }
 
-        other.item_type = self.item_type;
+        other.item = self.item;
 
         const max_to_add = max_item_stack - other.count;
         other.count += self.take_amount(max_to_add);
     }
 
     fn move_half_items_to(self: *Self, other: *Self) void {
-        if(self.item_type == null) {
+        if(self.item == null) {
             return;
         }
 
-        if(other.item_type != null and self.item_type != other.item_type) {
+        if(other.item != null and self.item != other.item) {
             return;
         }
 
-        other.item_type = self.item_type;
+        other.item = self.item;
         const half_current = self.count / 2;
         other.count += self.take_amount(half_current);
     }
@@ -1746,27 +1799,27 @@ const InventorySlot = struct {
     fn swap(self: *Self, other: *Self) void {
         const other_copy = other.*;
 
-        other.item_type = self.item_type;
+        other.item = self.item;
         other.count = self.count;
 
-        self.item_type = other_copy.item_type;
+        self.item = other_copy.item;
         self.count = other_copy.count;
     }
 
     fn clear(self: *Self) usize {
-        if(self.item_type == null) {
+        if(self.item == null) {
             return 0;
         }
 
         const current_count = self.count;
-        self.item_type = null;
+        self.item = null;
         self.count = 0;
 
         return current_count;
     }
 
     fn is_empty(self: *const Self) bool {
-        return self.item_type == null;
+        return self.item == null;
     }
 
     fn is_full(self: *const Self) bool {
@@ -1774,7 +1827,11 @@ const InventorySlot = struct {
     }
 
     fn is_compatible(self: *const Self, item: Item) bool {
-        return self.item_type == null or self.item_type.? == item;
+        return self.item == null or self.item.? == item;
+    }
+
+    fn has_flag(self: *const Self, flag: u8) bool {
+        return (self.flags & flag) == flag;
     }
 };
 
@@ -1804,7 +1861,7 @@ const BeltStorageSlot = struct {
 const Player = struct {
     const Self = @This();
 
-    inventory:[player_inventory_size]InventorySlot,
+    inventory: [player_inventory_size]InventorySlot,
     selected_item: usize,
     placement_dirction: Direction,
 
@@ -1813,7 +1870,7 @@ const Player = struct {
             var inputs_found: usize = 0;
 
             for(&self.inventory) |*slot| {
-                if(slot.item_type == input.item)  {
+                if(slot.item == input.item)  {
                     inputs_found += slot.count;  
                 }
             }
@@ -1830,7 +1887,7 @@ const Player = struct {
             var inputs_found: usize = 0;
 
             for(&self.inventory) |*slot| {
-                if(slot.item_type == input.item)  {
+                if(slot.item == input.item)  {
                     const amount_taken = slot.take_amount(input.count - inputs_found);
                     inputs_found += amount_taken;
                     if(inputs_found == input.count) {
@@ -1849,7 +1906,7 @@ const Player = struct {
     // the inventory
     fn get_selected_item_type(self: *const Self) ?Item {
         const slot = &self.inventory[self.selected_item];
-        return if (slot.count == 0) null else slot.item_type;
+        return if (slot.count == 0) null else slot.item;
     }
 
     fn get_selected_inventory_slot(self: *Self) *InventorySlot {
@@ -1861,14 +1918,14 @@ const Player = struct {
     // then null is returned
     fn try_pop_selected_item(self: *Self) ?Item {
         const slot = self.get_selected_inventory_slot();
-        const item = slot.item_type;
+        const item = slot.item;
         
         if(item == null) {
             return null;
         }
 
         slot.count -= 1;
-        if(slot.count == 0) slot.item_type = null;
+        if(slot.count == 0) slot.item = null;
 
         return item;
     }
@@ -1877,13 +1934,13 @@ const Player = struct {
     // this may not change the inventory slot or it may clear 
     // it completely
     fn add_stack_from_inventory_slot_to_inventory(self: *Self, inventory_slot: *InventorySlot) void {
-        if(inventory_slot.item_type == null) return;
+        if(inventory_slot.item == null) return;
 
-        const remaining = self.add_item_to_inventory(inventory_slot.item_type.?, inventory_slot.count);
+        const remaining = self.add_item_to_inventory(inventory_slot.item.?, inventory_slot.count);
         inventory_slot.count = remaining;
 
         if(inventory_slot.count == 0) {
-            inventory_slot.item_type = null;
+            inventory_slot.item = null;
         }
     }
 
@@ -1894,9 +1951,9 @@ const Player = struct {
     fn add_stack_from_selected_slot_to_inventory_slot(self: *Self, inventory_slot: *InventorySlot) void {
         const selected_item_type = self.get_selected_item_type() orelse return;
         
-        if(inventory_slot.item_type != null and selected_item_type != inventory_slot.item_type) return;
+        if(inventory_slot.item != null and selected_item_type != inventory_slot.item) return;
 
-        inventory_slot.item_type = selected_item_type;
+        inventory_slot.item = selected_item_type;
 
         // 1. get space left in the target inventory slot
         // 2. take items from selected slot, with the max being the space left
@@ -1915,7 +1972,7 @@ const Player = struct {
             if(remaining_count <= 0) break;
 
             const slot = &self.inventory[i];
-            if(slot.item_type != item) continue;
+            if(slot.item != item) continue;
             
             const space_remaining = max_item_stack - slot.count;
             const amount_to_add = if(remaining_count > space_remaining) space_remaining else remaining_count;
@@ -1929,13 +1986,13 @@ const Player = struct {
             if(remaining_count <= 0) break;
             
             const slot = &self.inventory[i];
-            if(slot.item_type != null) continue;
+            if(slot.item != null) continue;
 
             if(i < 9 and !item.can_be_placed()) continue;
 
             const amount_to_add = if (count > max_item_stack) max_item_stack else count;
             
-            slot.item_type = item;
+            slot.item = item;
             slot.count += amount_to_add;
             remaining_count -= amount_to_add;
         }
@@ -2032,7 +2089,7 @@ pub fn update(state: *State, delta_time: f32) void {
             // only change direction if current slot is a tile
             // that can be placed and can be rotated
             const slot = state.g.player.get_selected_inventory_slot();
-            if(slot.item_type) |item| {
+            if(slot.item) |item| {
                 if(item.tile_when_placed()) |tile| {
                     if(tile.has_direction()) {
                         state.g.player.placement_dirction.next();
@@ -2257,26 +2314,26 @@ pub fn update(state: *State, delta_time: f32) void {
                     break :mouse_interaction;
                 }
 
-                if(target_ui_slot.has_flag(UIIInventorySlot.only_smeltable_flag) and !in_hand.item_type.?.can_be_smelted()) {
+                if(target_ui_slot.has_flag(UIIInventorySlot.only_smeltable_flag) and !in_hand.item.?.can_be_smelted()) {
                     break :mouse_interaction;
                 }
 
-                if(target_ui_slot.has_flag(UIIInventorySlot.only_fuel_flag) and !in_hand.item_type.?.can_be_fuel()) {
+                if(target_ui_slot.has_flag(UIIInventorySlot.only_fuel_flag) and !in_hand.item.?.can_be_fuel()) {
                     break :mouse_interaction;
                 }
 
-                if(target_ui_slot.has_flag(UIIInventorySlot.only_placeable_flag) and !in_hand.item_type.?.can_be_placed()) {
+                if(target_ui_slot.has_flag(UIIInventorySlot.only_placeable_flag) and !in_hand.item.?.can_be_placed()) {
                     break :mouse_interaction;
                 }
 
-                if(target_ui_slot.has_flag(UIIInventorySlot.only_crushable_flag) and !in_hand.item_type.?.can_be_crushed()) {
+                if(target_ui_slot.has_flag(UIIInventorySlot.only_crushable_flag) and !in_hand.item.?.can_be_crushed()) {
                     break :mouse_interaction;
                 }
 
                 if(state.input.left_mouse) {
                     if(!target_game_slot.is_empty()) {
 
-                        if(target_game_slot.item_type == in_hand.item_type) {
+                        if(target_game_slot.item == in_hand.item) {
                             in_hand.move_items_to(target_game_slot);
                         } else {
                             in_hand.swap(target_game_slot);
@@ -2379,7 +2436,7 @@ pub fn draw(state: *State) void {
                 );
 
                 for(&belt.left_storage, 0..) |*slot, slot_index| {
-                    if(slot.item == null) {
+                    if(slot.is_empty()) {
                         continue;
                     }
 
@@ -2394,7 +2451,7 @@ pub fn draw(state: *State) void {
                 }
 
                 for(&belt.right_storage, 0..) |*slot, slot_index| {
-                    if(slot.item == null) {
+                    if(slot.is_empty()) {
                         continue;
                     }
 
@@ -2455,7 +2512,7 @@ pub fn draw(state: *State) void {
         var world_position = tile_position.to_world_position();
 
         const selected_slot = state.g.player.get_selected_inventory_slot();
-        if(selected_slot.item_type) |item| {
+        if(selected_slot.item) |item| {
             if(item.tile_when_placed()) |tile|  {
                 if(tile.has_direction()) {
                     world_position = move_draw_location_on_direction(world_position, state.g.player.placement_dirction);
@@ -2582,7 +2639,7 @@ pub fn draw(state: *State) void {
         }
 
         // draw item in hand
-        if(state.g.ui.in_hand.item_type) |item| {
+        if(state.g.ui.in_hand.item) |item| {
             const item_texture = item.get_texture();
             const icon_x = mouse_screen_position.x + 10;
             const icon_y = mouse_screen_position.y + 10;
@@ -3132,7 +3189,7 @@ fn generate_world(state: *State) void {
 fn draw_inventory_slot(inventory_slot: *const InventorySlot, x: f32, y: f32, size: f32, tint: raylib.Color, allocator: std.mem.Allocator) void {
     render.draw_texture_tint(get_alt_texture(.item_slot), x, y, size, size, tint);
 
-    if(inventory_slot.item_type) |item| {                     
+    if(inventory_slot.item) |item| {                     
         const item_texture = item.get_texture();
         render.draw_texture(item_texture, x, y, size, size);
 
@@ -3332,11 +3389,9 @@ fn load_game_data(state: *State) !void {
         std.mem.copyForwards(u8, std.mem.asBytes(&new_tile_data_len), buffer[read_index..read_index + @sizeOf(usize)]);
         read_index += @sizeOf(usize);
     
-        if(new_tile_data_len > state.g.tile_data.items.len) {
-            try state.g.tile_data.resize(new_tile_data_len);
-        }
+        try state.g.tile_data.resize(new_tile_data_len);
     
-        for(state.g.tile_data.items, 0..new_tile_data_len) |*tile_data, _| {
+        for(state.g.tile_data.items) |*tile_data| {
             std.mem.copyForwards(u8, std.mem.asBytes(tile_data), buffer[read_index..read_index + @sizeOf(TileData)]);
             read_index += @sizeOf(TileData);
         }
@@ -3348,11 +3403,9 @@ fn load_game_data(state: *State) !void {
         std.mem.copyForwards(u8, std.mem.asBytes(&new_networks_len), buffer[read_index..read_index + @sizeOf(usize)]);
         read_index += @sizeOf(usize);
     
-        if(new_networks_len > state.g.networks.items.len) {
-            try state.g.networks.resize(new_networks_len);
-        }
+        try state.g.networks.resize(new_networks_len);
     
-        for(state.g.networks.items, 0..new_networks_len) |*network, _| {
+        for(state.g.networks.items) |*network| {
             std.mem.copyForwards(u8, std.mem.asBytes(network), buffer[read_index..read_index + @sizeOf(Network)]);
             read_index += @sizeOf(Network);
         }
@@ -3364,11 +3417,9 @@ fn load_game_data(state: *State) !void {
         std.mem.copyForwards(u8, std.mem.asBytes(&new_nodes_len), buffer[read_index..read_index + @sizeOf(usize)]);
         read_index += @sizeOf(usize);
     
-        if(new_nodes_len > state.g.network_nodes.items.len) {
-            try state.g.network_nodes.resize(new_nodes_len);
-        }
+        try state.g.network_nodes.resize(new_nodes_len);
     
-        for(state.g.network_nodes.items, 0..new_nodes_len) |*node, _| {
+        for(state.g.network_nodes.items) |*node| {
             std.mem.copyForwards(u8, std.mem.asBytes(node), buffer[read_index..read_index + @sizeOf(NetworkNode)]);
             read_index += @sizeOf(NetworkNode);
         }
