@@ -1161,26 +1161,29 @@ const Tile = enum(u8) {
     fn belt_give(self: Self, item: Item, from_index: usize, is_left_side: bool, tile_index: usize, tile_data: ?*TileData, state: *const State) bool {
         switch (self) {
             .belt => {
-                const belt = &tile_data.?.data.belt;
+                const belt = &get_tile_data(state, tile_index).data.belt;
 
                 const current_position = get_tile_position_from_tile_index(tile_index);
                 const from_position = get_tile_position_from_tile_index(from_index);
-                const input_position = current_position.get_adjacent_tile_at_direction(state.g.forground_tiles[tile_index].direction);
+                const current_direction = state.g.forground_tiles[tile_index].direction;
 
-                // if the position that our input is facing is not the same as where the belt
-                // that is trying to give us input is then do not accept
-                if(input_position.x != from_position.x or input_position.y != from_position.y) return false;
+                const from_direction = current_position.get_direction_from_adjacent_tile(&from_position) orelse std.debug.panic("tried to input to a tile when not beside\n", .{});
+                const relative_direction = current_direction.get_relative_between_directions(from_direction);
 
-                if(is_left_side) {
-                    if(belt.left_storage[0].is_empty()) {
-                        belt.left_storage[0].item = item;
-                        return true;
+                const target_storage_slot: ?*InventorySlot = switch (relative_direction) {
+                    .up => null,
+                    .right => if(is_left_side) &belt.right_storage[1] else &belt.right_storage[4],
+                    .left => if(is_left_side) &belt.left_storage[4] else &belt.left_storage[1],
+                    .down => if(is_left_side) &belt.left_storage[0] else &belt.right_storage[0],
+                };
+
+                if(target_storage_slot) |slot| {
+                    if(!slot.is_empty()) {
+                        return false;
                     }
-                } else {
-                    if(belt.right_storage[0].is_empty()) {
-                        belt.right_storage[0].item = item;
-                        return true;
-                    }
+
+                    slot.item = item;
+                    return true;
                 }
 
                 return false;
@@ -2037,12 +2040,22 @@ pub fn update(state: *State, delta_time: f32) void {
         const tick_increment = 0.01;
 
         if(state.key(raylib.KEY_LEFT) == .down) {
-            state.time_per_tick -= tick_increment;
+            if(state.input.left_shift) {
+                state.time_per_tick -= 10 * tick_increment; 
+            } else {
+                state.time_per_tick -= tick_increment; 
+            }
+            
             std.debug.print("tick speed {d}\n", .{state.time_per_tick});
         }
 
         if(state.key(raylib.KEY_RIGHT) == .down) {
-            state.time_per_tick += tick_increment;
+            if(state.input.left_shift) {
+                state.time_per_tick += 10 * tick_increment; 
+            } else {
+                state.time_per_tick += tick_increment; 
+            }
+
             std.debug.print("tick speed {d}\n", .{state.time_per_tick});
         }
 
