@@ -16,8 +16,8 @@ const fastnoise = @import("fastnoise.zig");
 const game = @import("game.zig");
 const spline_editor = @import("spline_editor.zig");
 
-const default_screen_width = 1400;
-const default_screen_height = 1000;
+const default_screen_width = 1100;
+const default_screen_height = 850;
 
 var time_per_tick: f32 = 0.1;
       
@@ -277,6 +277,26 @@ pub const Spline = struct {
         return Self{
             .length = 0,
             .buffer = [_]SplinePoint{.{.x = 0, .y = 0}} ** max_points,
+        };
+    }
+
+    // given two points in the spline return a new point
+    // inbetween based off the ratio given t
+    // this is just based of the two points given
+    // if they are not adjacent any points inbettwen are
+    // ignored, the resulting point is on a straight line 
+    // between the two points
+    pub fn interpolate(self: *const Self, start_point_index: usize, end_point_index: usize, t: f32) SplinePoint {
+        const start_point = self.buffer[start_point_index];
+        const end_point = self.buffer[end_point_index];
+
+        const delta_x = end_point.x - start_point.x;
+        const delta_y = end_point.y - start_point.y;
+
+
+        return .{
+            .x = start_point.x + (delta_x * t),
+            .y = start_point.y + (delta_y * t)
         };
     }
 

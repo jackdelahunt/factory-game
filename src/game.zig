@@ -2424,15 +2424,12 @@ pub fn draw(state: *State) void {
 
         render.draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
 
-        special_belt_render: {
+        // special belt render
+        {
             if(forground_tile.tile == .belt) {
                 const icon_size = 6;
 
                 const belt = &get_tile_data(state, i).data.belt;
-
-                if(false) {
-                    break :special_belt_render;
-                }
 
                 const left_spline_to_use = get_belt_spline(
                     belt.relative_output_direction == Direction.up,
@@ -2448,6 +2445,7 @@ pub fn draw(state: *State) void {
                     belt.relative_output_direction
                 );
 
+                // TODO: at some point figure out how to do interpolation for these points
                 for(&belt.left_storage, 0..) |*slot, slot_index| {
                     if(slot.is_empty()) {
                         continue;
