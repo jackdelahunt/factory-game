@@ -106,6 +106,7 @@ pub const GameState = struct {
         self.player.inventory[5].item = .furnace;       self.player.inventory[5].count = 99;
         self.player.inventory[6].item = .pole;          self.player.inventory[6].count = 99;
         self.player.inventory[7].item = .battery;       self.player.inventory[7].count = 99;
+        self.player.inventory[8].item = .researcher;    self.player.inventory[8].count = 99;
         self.player.inventory[10].item = .coal;         self.player.inventory[10].count = 99;
         self.player.inventory[11].item = .coal;         self.player.inventory[11].count = 99;
         self.player.inventory[12].item = .coal;         self.player.inventory[12].count = 99;
@@ -446,10 +447,11 @@ const Tile = enum(u8) {
     pole,
     battery,
     crusher,
+    researcher,
 
     fn is_network_node(self: *const Self) bool {
         return switch (self.*) {
-            .pole, .battery, .crusher => true,
+            .pole, .battery, .crusher, .researcher => true,
             else => false,
         };
     }
@@ -505,7 +507,7 @@ const Tile = enum(u8) {
 
     fn has_direction(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .belt, .pipe_merger, .extractor => true,
+            .belt, .pipe_merger, .extractor => true,
             else => false,
         };
     }
@@ -541,6 +543,7 @@ const Tile = enum(u8) {
             .pole => .pole,
             .battery => .battery,
             .crusher => .crusher,
+            .researcher => .researcher,
             else => null,
         };
     }
@@ -577,6 +580,7 @@ const Tile = enum(u8) {
             .pole => get_tile_texture(.pole),
             .battery => get_tile_texture(.battery),
             .crusher => get_tile_texture(.crusher),
+            .researcher => get_tile_texture(.researcher),
         };
     }
 
@@ -591,7 +595,6 @@ const Tile = enum(u8) {
     // tuen to this tile to give items
     fn can_belt_turn_to(self: Self, from_index: usize, tile_index: usize, state: *const State) bool {
         switch (self) {
-            .furnace => return true,
             .belt => {
                 const current_position = get_tile_position_from_tile_index(tile_index);
                 if(!current_position.is_valid()) {
@@ -1415,6 +1418,7 @@ const Item = enum {
     pole,
     battery,
     crusher,
+    researcher,
 
     fn can_be_fuel(self: *const Self) bool {
         return switch (self.*) {  
@@ -1474,14 +1478,18 @@ const Item = enum {
             .pole => get_tile_texture(.pole),
             .battery => get_tile_texture(.battery),
             .crusher => get_tile_texture(.crusher),
+            .researcher => get_tile_texture(.researcher),
         };
     }
 
-    // used for associating an item to the tile that
-    // is placed, while some tiles drop and item
-    // that item cannot be used to place the tile
-    // therefore you need to check with this
-    fn tile_when_placed(self: *const Self) ?Tile {
+    fn can_be_placed(self: *const Self) bool {
+        return switch (self.*) {
+            .miner, .furnace, .belt, .pipe_merger, .extractor, .pole, .battery, .crusher, .researcher => true,
+            else => false,
+        };
+    }
+
+    fn tile_when_placed(self: *const Self) Tile {
         return switch (self.*) {
             .miner => .miner,
             .furnace => .furnace,
@@ -1491,16 +1499,10 @@ const Item = enum {
             .pole => .pole,
             .battery => .battery,
             .crusher => .crusher,
-            else => null,
+            .researcher => .researcher,
+            else => unreachable,
         };
-    }
-
-    fn can_be_placed(self: *const Self) bool {
-        return switch (self.*) {
-            .miner, .furnace, .belt, .pipe_merger, .extractor, .pole, .battery, .crusher => true,
-            else => false,
-        };
-    }
+    } 
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -1566,6 +1568,7 @@ const UI = struct {
     },
     current_panel: enum {
         none,
+        inventory,
         miner,
         furnace,
         crusher
@@ -2095,7 +2098,11 @@ pub fn update(state: *State, delta_time: f32) void {
 
         // ui controls
         if(state.key(raylib.KEY_E) == .down) {
-            close_inventory(state);
+            if(state.g.ui.current_panel != .none) {
+                close_inventory(state);
+            } else {
+                state.g.ui.current_panel = .inventory; 
+            }
         }
     
         if(state.key(raylib.KEY_R) == .down) {
@@ -2103,7 +2110,8 @@ pub fn update(state: *State, delta_time: f32) void {
             // that can be placed and can be rotated
             const slot = state.g.player.get_selected_inventory_slot();
             if(slot.item) |item| {
-                if(item.tile_when_placed()) |tile| {
+                if(item.can_be_placed()) {
+                    const tile = item.tile_when_placed();
                     if(tile.has_direction()) {
                         state.g.player.placement_dirction.next();
                     }
@@ -2162,14 +2170,10 @@ pub fn update(state: *State, delta_time: f32) void {
             }
 
             const current_selected_item = state.g.player.get_selected_item_type();
-            if(current_selected_item != null) {
-                const items_tile = current_selected_item.?.tile_when_placed();
-                if(items_tile) |value| {
-                    // only pop the item from the inventory when it has an
-                    // associated tile type to place
-                    if(place_tile_in_foreground(state, tile_index, value)) {
-                        _ = state.g.player.try_pop_selected_item();
-                    }
+            if(current_selected_item != null and current_selected_item.?.can_be_placed()) {
+                const tile = current_selected_item.?.tile_when_placed();
+                if(place_tile_in_foreground(state, tile_index, tile)) {
+                    _ = state.g.player.try_pop_selected_item();
                 }
             }
         }
@@ -2211,6 +2215,7 @@ pub fn update(state: *State, delta_time: f32) void {
 
             switch (state.g.ui.current_panel) {
                 .none => break :panels,
+                .inventory => {},
                 .miner => {
                     const miner_panel = &state.g.ui.miner_panel;
                     if(state.g.forground_tiles[miner_panel.tile_index].tile != .miner) {
@@ -2524,7 +2529,8 @@ pub fn draw(state: *State) void {
 
         const selected_slot = state.g.player.get_selected_inventory_slot();
         if(selected_slot.item) |item| {
-            if(item.tile_when_placed()) |tile|  {
+            if(item.can_be_placed()) {
+                const tile = item.tile_when_placed();
                 if(tile.has_direction()) {
                     world_position = move_draw_location_on_direction(world_position, state.g.player.placement_dirction);
                 }
@@ -2548,6 +2554,7 @@ pub fn draw(state: *State) void {
             .none => {
                 break :game_ui_drawing;
             },
+            .inventory => {},
             .miner => {
                 const miner_panel = &state.g.ui.miner_panel;
 
@@ -3366,8 +3373,6 @@ fn dump_game_data(state: *State) !void {
 
     const file = try std.fs.cwd().createFile("level.dat", .{});
     try file.writeAll(buffer);
- 
-    std.debug.print("{s}\n", .{buffer});
 }
 
 fn load_game_data(state: *State) !void {

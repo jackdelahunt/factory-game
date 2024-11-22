@@ -16,8 +16,8 @@ const fastnoise = @import("fastnoise.zig");
 const game = @import("game.zig");
 const spline_editor = @import("spline_editor.zig");
 
-const default_screen_width = 1100;
-const default_screen_height = 850;
+const default_screen_width = 1150;
+const default_screen_height = 800;
 
 var time_per_tick: f32 = 0.1;
       
@@ -32,7 +32,7 @@ const curved_belt_left_spline_path = "curved-belt-left.spline";
 const curved_belt_right_spline_path = "curved-belt-right.spline";
 
 // TILES
-var tile_textures: [16]raylib.Texture = .{undefined} ** 16;
+var tile_textures: [17]raylib.Texture = .{undefined} ** 17;
 
 // ITEMS
 var item_textures: [5]raylib.Texture = .{undefined} ** 5;
@@ -59,6 +59,7 @@ const pipe_merger_image_path = "tiles/pipe_merger.png";
 const pole_image_path = "tiles/pole.png";
 const battery_image_path = "tiles/battery.png";
 const crusher_image_path = "tiles/crusher.png";
+const researcher_image_path = "tiles/researcher.png";
 
 /////////////////////////////////////////////////////////////////////////////////
 ///                         @state
@@ -223,7 +224,8 @@ pub const TileTextures = enum {
     pipe_merger,
     pole,
     battery,
-    crusher
+    crusher,
+    researcher,
 };
 
 pub const ItemTextures = enum {
@@ -438,22 +440,23 @@ pub fn load_resources() !void {
     }
 
     tile_textures = .{
-       try load_texture(grass_tile_image_path),
-       try load_texture(stone_tile_image_path),
-       try load_texture(iron_ore_tile_image_path),
-       try load_texture(miner_tile_image_path),
-       try load_texture(coal_ore_tile_image_path),
-       try load_texture(furnace_tile_image_path),
-       try load_texture(tree_base_image_path),
-       try load_texture(tree_0_image_path),
-       try load_texture(extractor_image_path),
-       try load_texture(belt_image_path),
-       try load_texture(belt_left_image_path),
-       try load_texture(belt_right_image_path),
-       try load_texture(pipe_merger_image_path),
-       try load_texture(pole_image_path),
-       try load_texture(battery_image_path),
-       try load_texture(crusher_image_path),
+        try load_texture(grass_tile_image_path),
+        try load_texture(stone_tile_image_path),
+        try load_texture(iron_ore_tile_image_path),
+        try load_texture(miner_tile_image_path),
+        try load_texture(coal_ore_tile_image_path),
+        try load_texture(furnace_tile_image_path),
+        try load_texture(tree_base_image_path),
+        try load_texture(tree_0_image_path),
+        try load_texture(extractor_image_path),
+        try load_texture(belt_image_path),
+        try load_texture(belt_left_image_path),
+        try load_texture(belt_right_image_path),
+        try load_texture(pipe_merger_image_path),
+        try load_texture(pole_image_path),
+        try load_texture(battery_image_path),
+        try load_texture(crusher_image_path),
+        try load_texture(researcher_image_path),
     };
 
     item_textures = .{
