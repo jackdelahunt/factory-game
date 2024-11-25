@@ -97,22 +97,27 @@ pub const GameState = struct {
             .ui = UI.init(),
         };
 
-        // temp adding items to inventory 
-        self.player.inventory[0].item = .miner;         self.player.inventory[0].count = 99;
-        self.player.inventory[1].item = .extractor;     self.player.inventory[1].count = 99;
-        self.player.inventory[2].item = .belt;          self.player.inventory[2].count = 99;
-        self.player.inventory[3].item = .pipe_merger;   self.player.inventory[3].count = 99;
-        self.player.inventory[4].item = .crusher;       self.player.inventory[4].count = 99;
-        self.player.inventory[5].item = .furnace;       self.player.inventory[5].count = 99;
-        self.player.inventory[6].item = .pole;          self.player.inventory[6].count = 99;
-        self.player.inventory[7].item = .battery;       self.player.inventory[7].count = 99;
-        self.player.inventory[8].item = .researcher;    self.player.inventory[8].count = 99;
-        self.player.inventory[10].item = .coal;         self.player.inventory[10].count = 99;
-        self.player.inventory[11].item = .coal;         self.player.inventory[11].count = 99;
-        self.player.inventory[12].item = .coal;         self.player.inventory[12].count = 99;
-        self.player.inventory[13].item = .coal;         self.player.inventory[13].count = 99;
-        self.player.inventory[14].item = .coal;         self.player.inventory[14].count = 99;
-        self.player.inventory[15].item = .coal;         self.player.inventory[15].count = 99;
+        if(false) {
+            // temp adding items to inventory 
+            self.player.inventory[0].item = .miner;         self.player.inventory[0].count = 99;
+            self.player.inventory[1].item = .extractor;     self.player.inventory[1].count = 99;
+            self.player.inventory[2].item = .belt;          self.player.inventory[2].count = 99;
+            self.player.inventory[3].item = .splitter;      self.player.inventory[3].count = 99;
+            self.player.inventory[4].item = .crusher;       self.player.inventory[4].count = 99;
+            self.player.inventory[5].item = .furnace;       self.player.inventory[5].count = 99;
+            self.player.inventory[6].item = .pole;          self.player.inventory[6].count = 99;
+            self.player.inventory[7].item = .battery;       self.player.inventory[7].count = 99;
+            self.player.inventory[8].item = .researcher;    self.player.inventory[8].count = 99;
+            self.player.inventory[10].item = .coal;         self.player.inventory[10].count = 99;
+            self.player.inventory[11].item = .coal;         self.player.inventory[11].count = 99;
+            self.player.inventory[12].item = .coal;         self.player.inventory[12].count = 99;
+            self.player.inventory[13].item = .coal;         self.player.inventory[13].count = 99;
+            self.player.inventory[14].item = .coal;         self.player.inventory[14].count = 99;
+            self.player.inventory[15].item = .coal;         self.player.inventory[15].count = 99;
+        } else {
+            // default starting inventory
+            self.player.inventory[0].item = .miner;         self.player.inventory[0].count = 1;
+        }
 
         return self;
     }
@@ -151,6 +156,33 @@ const crafting_recipes = [_]CraftingRecipe {
             .{.item = .stone, .count = 5},
         },
         .input_count = 2,
+    },
+    // extractor
+    .{
+        .output = .{.item = .extractor, .count = 1},
+        .inputs = [_]CraftingRecipe.RecipeItem{
+            .{.item = .iron_ingot, .count = 5},
+            CraftingRecipe.empty_item()
+        },
+        .input_count = 1,
+    },
+    // belts
+    .{
+        .output = .{.item = .belt, .count = 5},
+        .inputs = [_]CraftingRecipe.RecipeItem{
+            .{.item = .iron_ingot, .count = 5},
+            CraftingRecipe.empty_item()
+        },
+        .input_count = 1,
+    },
+    // splitter
+    .{
+        .output = .{.item = .splitter, .count = 1},
+        .inputs = [_]CraftingRecipe.RecipeItem{
+            .{.item = .iron_ingot, .count = 5},
+            CraftingRecipe.empty_item()
+        },
+        .input_count = 1,
     }
 };
 
@@ -448,6 +480,7 @@ const Tile = enum(u8) {
     battery,
     crusher,
     researcher,
+    splitter,
 
     fn is_network_node(self: *const Self) bool {
         return switch (self.*) {
@@ -493,7 +526,7 @@ const Tile = enum(u8) {
 
     fn belt_can_give(self: *const Self) bool {
         return switch (self.*) {
-            .belt, .pipe_merger => true,
+            .belt, .pipe_merger, .splitter => true,
             else => false,
         };
     }
@@ -507,7 +540,7 @@ const Tile = enum(u8) {
 
     fn has_direction(self: *const Self) bool {
         return switch (self.*) {
-            .belt, .pipe_merger, .extractor => true,
+            .belt, .pipe_merger, .extractor, .splitter => true,
             else => false,
         };
     }
@@ -544,6 +577,7 @@ const Tile = enum(u8) {
             .battery => .battery,
             .crusher => .crusher,
             .researcher => .researcher,
+            .splitter => .splitter,
             else => null,
         };
     }
@@ -581,12 +615,13 @@ const Tile = enum(u8) {
             .battery => get_tile_texture(.battery),
             .crusher => get_tile_texture(.crusher),
             .researcher => get_tile_texture(.researcher),
+            .splitter => get_tile_texture(.splitter),
         };
     }
 
     fn has_tile_data(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .belt, .pipe_merger, .extractor, .crusher => true,
+            .miner, .furnace, .belt, .pipe_merger, .extractor, .crusher, .splitter => true,
             else => false,
         };
     }
@@ -884,6 +919,63 @@ const Tile = enum(u8) {
                     }
                 }
             },
+            .splitter, => {
+                const splitter = &tile_data.?.data.splitter;
+
+                if(splitter.item == null) {
+                    return;
+                }
+
+                // check to output item
+                check_output: {
+                    // check the oppisite of the last output direction
+                    // if can give then give it and change last direcion and end
+                    // if it cant try the other side
+                    const current_position = get_tile_position_from_tile_index(tile_index);
+
+                    const output_directions = .{
+                        // always check the oppisite of the last dfirection first
+                        // if that fails then try the next side
+                        state.g.forground_tiles[tile_index].direction.relative(splitter.last_output_direction.oppisite()),
+                        state.g.forground_tiles[tile_index].direction.relative(splitter.last_output_direction),
+                    };
+
+                    const output_positions = [_]TilePosition{
+                        current_position.get_adjacent_tile_at_direction(output_directions[0]),
+                        current_position.get_adjacent_tile_at_direction(output_directions[1])
+                    };
+
+                    for(&output_positions) |*output_position| {
+                        if(!output_position.is_valid()) {
+                            break :check_output;
+                        }
+    
+                        const output_index = output_position.get_tile_index();
+                        const output_tile = state.g.forground_tiles[output_index].tile;
+                        
+                        if(!output_tile.belt_can_give()) {
+                            break :check_output;
+                        }
+    
+                        var output_tile_data: ?*TileData = null;  
+                        if(output_tile.has_tile_data()) {
+                            output_tile_data = get_tile_data(state, output_index);
+                        }
+    
+                        if(output_tile.belt_give(splitter.item.?, tile_index, true, output_index, tile_data, state)) {
+                            splitter.item = null;
+    
+                            switch (splitter.last_output_direction) {
+                                .left => splitter.last_output_direction = .right,
+                                .right => splitter.last_output_direction = .left,
+                                else => unreachable,
+                            }
+
+                            break :check_output;
+                        }
+                    }
+                }
+            },
             .pipe_merger => {
                 const pipe_merger = &tile_data.?.data.pipe_merger;
 
@@ -1046,6 +1138,40 @@ const Tile = enum(u8) {
                         }
                     }
             },
+            else => unreachable,
+        }
+    }
+
+    fn player_interacted(self: Self, tile_index: usize, state: *State) void {
+        switch (self) {
+            .miner, .furnace, .crusher => {
+                open_inventory(state, tile_index);
+            },
+            .belt => {
+                var belt = &get_tile_data(state, tile_index).data.belt;
+
+                for(&belt.left_storage, 0..) |*slot, i| {
+                    if(slot.is_empty()) {
+                        continue; 
+                    }
+
+                    if(state.g.player.add_item_to_inventory(slot.item.?, 1) == 0) {
+                        _ = slot.clear();
+                        belt.left_progress[i] = 0;
+                    }
+                }
+
+                for(&belt.right_storage, 0..) |*slot, i| {
+                    if(slot.is_empty()) {
+                        continue; 
+                    }
+
+                    if(state.g.player.add_item_to_inventory(slot.item.?, 1) == 0) {
+                        _ = slot.clear();
+                        belt.left_progress[i] = 0;
+                    }
+                }
+            },
             else => {},
         }
     }
@@ -1191,6 +1317,29 @@ const Tile = enum(u8) {
 
                 return false;
             },
+            .splitter => {
+                const splitter = &get_tile_data(state, tile_index).data.splitter;
+
+                if(splitter.item != null) {
+                    return false;
+                }
+
+                const current_position = get_tile_position_from_tile_index(tile_index);
+                const from_position = get_tile_position_from_tile_index(from_index);
+                const current_direction = state.g.forground_tiles[tile_index].direction;
+
+                const from_direction = current_position.get_direction_from_adjacent_tile(&from_position) orelse std.debug.panic("tried to input to a tile when not beside\n", .{});
+                const relative_from_direction = current_direction.get_relative_between_directions(from_direction);
+
+                // only accept input when it is from the bottom
+                switch (relative_from_direction) {
+                    .down => {},
+                    else => return false,
+                }
+
+                splitter.item = item;
+                return true;
+            },
             .pipe_merger => {
                 const pipe_merger = &tile_data.?.data.pipe_merger;
 
@@ -1288,6 +1437,15 @@ const Tile = enum(u8) {
                         .relative_output_direction = .up,
                     },
                 },
+            },
+            .splitter => TileData{
+                .tile_index = 0,
+                .data = .{
+                    .splitter = .{
+                        .item = null,
+                        .last_output_direction = .right, // will always try and output left right
+                    },
+                }
             },
             .pipe_merger => TileData{
                 .tile_index = 0,
@@ -1391,6 +1549,10 @@ const TileData = struct {
                 return self.right_progress[self.right_storage.len - 1];
             }
         },
+        splitter: struct {
+            item: ?Item,
+            last_output_direction: Direction,
+        },
         extractor: struct {
             item: ?Item,
         },
@@ -1419,6 +1581,7 @@ const Item = enum {
     battery,
     crusher,
     researcher,
+    splitter,
 
     fn can_be_fuel(self: *const Self) bool {
         return switch (self.*) {  
@@ -1470,7 +1633,7 @@ const Item = enum {
             .coal => get_item_texture(.coal),
             .furnace => get_tile_texture(.furnace),
             .iron_ingot => get_item_texture(.iron_ingot),
-            .stone => get_tile_texture(.stone),
+            .stone => get_item_texture(.stone),
             .wood => get_item_texture(.wood),
             .belt => get_tile_texture(.belt),
             .pipe_merger => get_tile_texture(.pipe_merger),
@@ -1479,12 +1642,13 @@ const Item = enum {
             .battery => get_tile_texture(.battery),
             .crusher => get_tile_texture(.crusher),
             .researcher => get_tile_texture(.researcher),
+            .splitter => get_tile_texture(.splitter),
         };
     }
 
     fn can_be_placed(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .belt, .pipe_merger, .extractor, .pole, .battery, .crusher, .researcher => true,
+            .miner, .furnace, .belt, .pipe_merger, .extractor, .pole, .battery, .crusher, .researcher, .splitter => true,
             else => false,
         };
     }
@@ -1500,6 +1664,7 @@ const Item = enum {
             .battery => .battery,
             .crusher => .crusher,
             .researcher => .researcher,
+            .splitter => .splitter,
             else => unreachable,
         };
     } 
@@ -1545,11 +1710,36 @@ const UIIInventorySlot = struct {
     }
 };
 
+const UICraftingButton = struct {
+    const Self = @This();
+
+    x: f32,
+    y: f32,
+    size: f32,
+    recipe: *const CraftingRecipe,
+
+    fn draw(self: *const Self, tint: raylib.Color, allocator: std.mem.Allocator) void {
+        render.draw_texture_tint(get_alt_texture(.item_slot), self.x, self.y, self.size, self.size, tint);
+
+        const item_texture = self.recipe.output.item.get_texture();
+        render.draw_texture(item_texture, self.x, self.y, self.size, self.size);
+         
+        const string = std.fmt.allocPrintZ(allocator, "{}", .{self.recipe.output.count}) catch unreachable;
+        render.text(string, self.x, self.y, 20, raylib.WHITE);
+    }
+
+    fn mouse_over(self: *const Self, mouse_position: WorldPosition) bool {
+        return mouse_position.x >= self.x and mouse_position.x <= (self.x + self.size) 
+            and mouse_position.y >= self.y and mouse_position.y <= (self.y + self.size);
+    }
+};
+
 const UI = struct {
     const Self = @This();
 
     in_hand: InventorySlot,
-    player_panel: [player_inventory_size]UIIInventorySlot,
+    player_inventory_panel: [player_inventory_size]UIIInventorySlot,
+    crafting_panel: [crafting_recipes.len]UICraftingButton,
     miner_panel: struct {
         tile_index: usize,
         input_slot: UIIInventorySlot,
@@ -1568,7 +1758,7 @@ const UI = struct {
     },
     current_panel: enum {
         none,
-        inventory,
+        crafting,
         miner,
         furnace,
         crusher
@@ -1593,7 +1783,7 @@ const UI = struct {
             const start_x = (window_width() * 0.5) - total_width - 20;
             const start_y = (window_height() * 0.5) - (total_height * 0.5);
 
-            for(&ui.player_panel, 0..) |*ui_slot, _i| {
+            for(&ui.player_inventory_panel, 0..) |*ui_slot, _i| {
                 const i = @as(f32, @floatFromInt(_i));
 
                 const x_index = @mod(i, 9);
@@ -1605,6 +1795,30 @@ const UI = struct {
 
                 // slots 0..8 are only for placable items
                 ui_slot.flags = if(_i < 9) UIIInventorySlot.only_placeable_flag else 0;
+            }
+        }
+
+        // crafting panel init
+        {
+            const padding = 5;
+            const slot_size = 50;
+            const number_of_columns = 9;
+
+            const total_height = (number_of_columns * slot_size) + ((number_of_columns - 1) * padding);
+
+            const start_x = (window_width() * 0.5) + 20;
+            const start_y = (window_height() * 0.5) - (total_height * 0.5);
+
+            for(&ui.crafting_panel, 0..) |*crafting_button, _i| {
+                const i = @as(f32, @floatFromInt(_i));
+
+                const x_index = @mod(i, number_of_columns);
+                const y_index = @divFloor(i, number_of_columns);
+
+                crafting_button.x = start_x + (slot_size * x_index) + (padding * x_index);
+                crafting_button.y = start_y + (slot_size * y_index) + (padding * y_index);
+                crafting_button.size = slot_size;
+                crafting_button.recipe = &crafting_recipes[_i];
             }
         }
 
@@ -2101,7 +2315,7 @@ pub fn update(state: *State, delta_time: f32) void {
             if(state.g.ui.current_panel != .none) {
                 close_inventory(state);
             } else {
-                state.g.ui.current_panel = .inventory; 
+                state.g.ui.current_panel = .crafting; 
             }
         }
     
@@ -2165,7 +2379,7 @@ pub fn update(state: *State, delta_time: f32) void {
 
         if(state.input.right_mouse) {
             if(state.g.forground_tiles[tile_index].tile != .air) {
-                open_inventory(state, tile_index);
+                state.g.forground_tiles[tile_index].tile.player_interacted(tile_index, state);
                 break :mouse_update;
             }
 
@@ -2201,11 +2415,11 @@ pub fn update(state: *State, delta_time: f32) void {
         var target_slots: ?struct {ui_slot: *UIIInventorySlot, slot: *InventorySlot} = null;
 
         find_target_slot: {
-            for(&state.g.ui.player_panel, 0..) |*ui_slot, i| {
+            for(&state.g.ui.player_inventory_panel, 0..) |*ui_slot, i| {
                 if(ui_slot.mouse_over(mouse_position)) {
                     const player_inventory_slot = &state.g.player.inventory[i];
                     target_slots = .{
-                        .ui_slot = &state.g.ui.player_panel[i],
+                        .ui_slot = &state.g.ui.player_inventory_panel[i],
                         .slot = player_inventory_slot
                     };
 
@@ -2215,7 +2429,15 @@ pub fn update(state: *State, delta_time: f32) void {
 
             switch (state.g.ui.current_panel) {
                 .none => break :panels,
-                .inventory => {},
+                .crafting => {
+                    for(&state.g.ui.crafting_panel) |*crafting_button| {
+                        if(crafting_button.mouse_over(mouse_position) and state.input.left_mouse) {
+                            if(state.g.player.can_craft_recipe(crafting_button.recipe)) {
+                                state.g.player.craft_recipe(crafting_button.recipe);
+                            }
+                        }
+                    }
+                },
                 .miner => {
                     const miner_panel = &state.g.ui.miner_panel;
                     if(state.g.forground_tiles[miner_panel.tile_index].tile != .miner) {
@@ -2554,7 +2776,28 @@ pub fn draw(state: *State) void {
             .none => {
                 break :game_ui_drawing;
             },
-            .inventory => {},
+            .crafting => {
+                const crafting_background_width = 600;
+                const crafting_background_height = 550;
+        
+                const crafting_background_x = window_width() * 0.5;
+                const crafting_background_y = window_height() * 0.5 - (crafting_background_height * 0.5);
+     
+                render.draw_texture_pro(get_alt_texture(.item_slot), crafting_background_x, crafting_background_y, crafting_background_width, crafting_background_height, 0, raylib.SKYBLUE, false);
+
+                // draw each button first
+                for(&state.g.ui.crafting_panel) |*crafting_button| {
+                    const color = if(state.g.player.can_craft_recipe(crafting_button.recipe)) raylib.GREEN else raylib.RED;
+                    crafting_button.draw(color, state.scratch_space.allocator());
+                }
+
+                // then draw any input after so it is always drawn in the top
+                for(&state.g.ui.crafting_panel) |*crafting_button| {
+                    if(crafting_button.mouse_over(mouse_screen_position)) {
+                        draw_crafting_recipe_input(crafting_button.recipe, mouse_screen_position.x + 15, mouse_screen_position.y + 15, 50);
+                    }
+                }
+            },
             .miner => {
                 const miner_panel = &state.g.ui.miner_panel;
 
@@ -2639,21 +2882,37 @@ pub fn draw(state: *State) void {
         }
 
         // draw player inventory
-        for(&state.g.ui.player_panel, 0..) |*ui_slot, i| {
-            const color = switch (i) {
-                0 => raylib.RED,
-                1 => raylib.ORANGE,
-                2 => raylib.YELLOW,
-                3 => raylib.GREEN,
-                4 => raylib.SKYBLUE,
-                5 => raylib.BLUE,
-                6 => raylib.VIOLET,
-                7 => raylib.BROWN,
-                8 => raylib.BLACK,
-                else => raylib.WHITE
-            };
-
-            ui_slot.draw(&state.g.player.inventory[i], color, state.scratch_space.allocator());
+        {
+            // player inventory is drawn all the time
+            const padding = 10;
+    
+            const first_slot = &state.g.ui.player_inventory_panel[0];
+            const last_slot = &state.g.ui.player_inventory_panel[state.g.ui.player_inventory_panel.len - 1];
+    
+            const inventory_background_x = first_slot.x - padding;
+            const inventory_background_y = first_slot.y - padding;
+    
+            const inventory_background_width = last_slot.x + last_slot.size - first_slot.x + (padding * 2);
+            const inventory_background_height = last_slot.y + last_slot.size - first_slot.y + (padding * 2);
+    
+            render.draw_texture_pro(get_alt_texture(.item_slot), inventory_background_x, inventory_background_y, inventory_background_width, inventory_background_height, 0, raylib.BLUE, false);
+    
+            for(&state.g.ui.player_inventory_panel, 0..) |*ui_slot, i| {
+                const color = switch (i) {
+                    0 => raylib.RED,
+                    1 => raylib.ORANGE,
+                    2 => raylib.YELLOW,
+                    3 => raylib.GREEN,
+                    4 => raylib.SKYBLUE,
+                    5 => raylib.BLUE,
+                    6 => raylib.VIOLET,
+                    7 => raylib.BROWN,
+                    8 => raylib.BLACK,
+                    else => raylib.WHITE
+                };
+    
+                ui_slot.draw(&state.g.player.inventory[i], color, state.scratch_space.allocator());
+            }
         }
 
         // draw item in hand
@@ -2688,7 +2947,7 @@ pub fn draw(state: *State) void {
         render.text(max_scratch_string, window_width() - 100, 60, 20, raylib.PURPLE);
     }
 
-    // inventory
+    // inventory preview bar
     {
         const size = 50;
         const padding = 5;
@@ -2724,36 +2983,7 @@ pub fn draw(state: *State) void {
                 render.circle(indicator_x, indicator_y, indicator_radius, raylib.YELLOW);
             }
         }
-    }
-
-    // crafting ui
-    {
-        const padding = 5;
-        const output_icon_size = 50;
-
-        const mouse_screen_position = get_mouse_screen_position();
-
-        for(&crafting_recipes, 0..) |*recipe, _i| {
-            const craftable = state.g.player.can_craft_recipe(recipe);
-            const color = if(craftable) raylib.Fade(raylib.GREEN, 0.7) else raylib.Fade(raylib.RED, 0.7);
-
-            const i = @as(f32, @floatFromInt(_i));
-            const output_icon_x = padding;
-            const output_icon_y = padding + (output_icon_size * i) + (padding * i);
-
-            draw_crafting_recipe_output(recipe, output_icon_x, output_icon_y, output_icon_size, color);
-
-            if(mouse_screen_position.x >= output_icon_x and mouse_screen_position.x <= output_icon_x + output_icon_size) {
-                if(mouse_screen_position.y >= output_icon_y and mouse_screen_position.y <= output_icon_y + output_icon_size) {
-                    draw_crafting_recipe_input(recipe, mouse_screen_position.x + 15, mouse_screen_position.y, output_icon_size);
-
-                    if(craftable and state.input.left_mouse) {
-                        state.g.player.craft_recipe(recipe);
-                    }
-                }
-            }
-        }
-    }
+    } 
 
     raylib.EndDrawing();
 }
@@ -3372,6 +3602,8 @@ fn dump_game_data(state: *State) !void {
     }
 
     const file = try std.fs.cwd().createFile("level.dat", .{});
+    defer file.close();
+
     try file.writeAll(buffer);
 }
 

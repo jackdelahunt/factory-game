@@ -16,8 +16,8 @@ const fastnoise = @import("fastnoise.zig");
 const game = @import("game.zig");
 const spline_editor = @import("spline_editor.zig");
 
-const default_screen_width = 1150;
-const default_screen_height = 800;
+const default_screen_width = 1800;
+const default_screen_height = 1100;
 
 var time_per_tick: f32 = 0.1;
       
@@ -32,7 +32,7 @@ const curved_belt_left_spline_path = "curved-belt-left.spline";
 const curved_belt_right_spline_path = "curved-belt-right.spline";
 
 // TILES
-var tile_textures: [17]raylib.Texture = .{undefined} ** 17;
+var tile_textures: [18]raylib.Texture = .{undefined} ** 18;
 
 // ITEMS
 var item_textures: [5]raylib.Texture = .{undefined} ** 5;
@@ -60,6 +60,62 @@ const pole_image_path = "tiles/pole.png";
 const battery_image_path = "tiles/battery.png";
 const crusher_image_path = "tiles/crusher.png";
 const researcher_image_path = "tiles/researcher.png";
+const splitter_image_path = "tiles/splitter.png";
+
+// ITEMS
+const iron_item_image_path = "items/iron.png";
+const coal_item_image_path = "items/coal.png";
+const iron_ingot_item_image_path = "items/iron_ingot.png";
+const stone_item_image_path = "items/stone.png";
+const wood_item_image_path = "items/wood.png";
+
+// ALTS
+const item_slot_image_path = "items/item_slot.png";
+
+pub const TileTextures = enum {
+    grass,
+    stone,
+    iron_ore,
+    miner,
+    coal_ore,
+    furnace,
+    tree_base,
+    tree_0,
+    extractor,
+    belt,
+    belt_left,
+    belt_right,
+    pipe_merger,
+    pole,
+    battery,
+    crusher,
+    researcher,
+    splitter,
+};
+
+pub const ItemTextures = enum {
+    iron,
+    coal,
+    iron_ingot,
+    stone,
+    wood
+};
+
+pub const AltTextures = enum {
+    item_slot
+};
+
+pub fn get_tile_texture(tile: TileTextures) raylib.Texture {
+    return tile_textures[@intFromEnum(tile)];
+}
+
+pub fn get_item_texture(item: ItemTextures) raylib.Texture {
+    return item_textures[@intFromEnum(item)];
+}
+
+pub fn get_alt_texture(alt: AltTextures) raylib.Texture {
+    return alt_textures[@intFromEnum(alt)];
+}
 
 /////////////////////////////////////////////////////////////////////////////////
 ///                         @state
@@ -197,60 +253,6 @@ pub const State = struct {
         return self.keyboard[@intCast(k)];
     }
 };
-
-// ITEMS
-const iron_item_image_path = "items/iron.png";
-const coal_item_image_path = "items/coal.png";
-const iron_ingot_item_image_path = "items/iron_ingot.png";
-const stone_item_image_path = "items/stone.png";
-const wood_item_image_path = "items/wood.png";
-
-// ALTS
-const item_slot_image_path = "items/item_slot.png";
-
-pub const TileTextures = enum {
-    grass,
-    stone,
-    iron_ore,
-    miner,
-    coal_ore,
-    furnace,
-    tree_base,
-    tree_0,
-    extractor,
-    belt,
-    belt_left,
-    belt_right,
-    pipe_merger,
-    pole,
-    battery,
-    crusher,
-    researcher,
-};
-
-pub const ItemTextures = enum {
-    iron,
-    coal,
-    iron_ingot,
-    stone,
-    wood
-};
-
-pub const AltTextures = enum {
-    item_slot
-};
-
-pub fn get_tile_texture(tile: TileTextures) raylib.Texture {
-    return tile_textures[@intFromEnum(tile)];
-}
-
-pub fn get_item_texture(item: ItemTextures) raylib.Texture {
-    return item_textures[@intFromEnum(item)];
-}
-
-pub fn get_alt_texture(alt: AltTextures) raylib.Texture {
-    return alt_textures[@intFromEnum(alt)];
-}
 
 /////////////////////////////////////////////////////////////////////////////////
 ///                         @splines
@@ -457,6 +459,7 @@ pub fn load_resources() !void {
         try load_texture(battery_image_path),
         try load_texture(crusher_image_path),
         try load_texture(researcher_image_path),
+        try load_texture(splitter_image_path),
     };
 
     item_textures = .{
