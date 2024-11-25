@@ -97,7 +97,7 @@ pub const GameState = struct {
             .ui = UI.init(),
         };
 
-        if(false) {
+        if(true) {
             // temp adding items to inventory 
             self.player.inventory[0].item = .miner;         self.player.inventory[0].count = 99;
             self.player.inventory[1].item = .extractor;     self.player.inventory[1].count = 99;
@@ -114,6 +114,7 @@ pub const GameState = struct {
             self.player.inventory[13].item = .coal;         self.player.inventory[13].count = 99;
             self.player.inventory[14].item = .coal;         self.player.inventory[14].count = 99;
             self.player.inventory[15].item = .coal;         self.player.inventory[15].count = 99;
+            self.player.inventory[16].item = .red_science;  self.player.inventory[16].count = 99;
         } else {
             // default starting inventory
             self.player.inventory[0].item = .miner;         self.player.inventory[0].count = 1;
@@ -183,6 +184,33 @@ const crafting_recipes = [_]CraftingRecipe {
             CraftingRecipe.empty_item()
         },
         .input_count = 1,
+    },
+    // pole
+    .{
+        .output = .{.item = .pole, .count = 5},
+        .inputs = [_]CraftingRecipe.RecipeItem{
+            .{.item = .wood, .count = 6},
+            .{.item = .copper_ingot, .count = 2},
+        },
+        .input_count = 2,
+    },
+    // battery
+    .{
+        .output = .{.item = .battery, .count = 1},
+        .inputs = [_]CraftingRecipe.RecipeItem{
+            .{.item = .iron_ingot, .count = 1},
+            .{.item = .copper_ingot, .count = 3},
+        },
+        .input_count = 2,
+    },
+    // researcher
+    .{
+        .output = .{.item = .researcher, .count = 1},
+        .inputs = [_]CraftingRecipe.RecipeItem{
+            .{.item = .iron_ingot, .count = 10},
+            .{.item = .copper_ingot, .count = 10},
+        },
+        .input_count = 2,
     }
 };
 
@@ -193,18 +221,23 @@ const ore_table = [_]struct {
 } {
     .{
         .tile = .stone,
-        .threshold = 0.3,
-        .frequency = 0.13
+        .threshold = 0.2,
+        .frequency = 0.15
     },
     .{
         .tile = .iron_ore,
-        .threshold = 0.15,
-        .frequency = 0.1
+        .threshold = 0.18,
+        .frequency = 0.11
+    },
+    .{
+        .tile = .copper_ore,
+        .threshold = 0.20,
+        .frequency = 0.12
     },
     .{
         .tile = .coal_ore,
-        .threshold = 0.15,
-        .frequency = 0.12
+        .threshold = 0.25,
+        .frequency = 0.13
     },
 };
 
@@ -468,6 +501,7 @@ const Tile = enum(u8) {
     grass,
     stone,
     iron_ore,
+    copper_ore,
     miner,
     coal_ore,
     furnace,
@@ -499,13 +533,6 @@ const Tile = enum(u8) {
     fn is_network_generator(self: *const Self) bool {
         return switch (self.*) {
             .battery=> true,
-            else => false,
-        };
-    }
-
-    fn has_clickable_ui(self: *const Self) bool {
-        return switch (self.*) {
-            .miner, .furnace, .crusher => true,
             else => false,
         };
     }
@@ -549,7 +576,7 @@ const Tile = enum(u8) {
     // different to if a player can break it
     fn can_be_mined(self: *const Self) bool {
         return switch (self.*) {
-            .iron_ore, .coal_ore, .stone => true,
+            .iron_ore, .copper_ore, .coal_ore, .stone => true,
             else => false,
         };
     }
@@ -559,6 +586,7 @@ const Tile = enum(u8) {
     fn item_when_mined(self: *const Self) ?Item {
         return switch (self.*) {
             .iron_ore => .iron,
+            .copper_ore => .copper,
             .coal_ore, => .coal,
             .stone => .stone,
             else => null
@@ -603,6 +631,7 @@ const Tile = enum(u8) {
             .grass => get_tile_texture(.grass),
             .stone => get_tile_texture(.stone),
             .iron_ore => get_tile_texture(.iron_ore),
+            .copper_ore => get_tile_texture(.copper_ore),
             .miner => get_tile_texture(.miner),
             .coal_ore => get_tile_texture(.coal_ore),
             .furnace => get_tile_texture(.furnace),
@@ -621,7 +650,7 @@ const Tile = enum(u8) {
 
     fn has_tile_data(self: *const Self) bool {
         return switch (self.*) {
-            .miner, .furnace, .belt, .pipe_merger, .extractor, .crusher, .splitter => true,
+            .miner, .furnace, .belt, .pipe_merger, .extractor, .crusher, .splitter, .researcher => true,
             else => false,
         };
     }
@@ -1138,13 +1167,35 @@ const Tile = enum(u8) {
                         }
                     }
             },
+            .researcher => {
+                var researcher = &tile_data.?.data.researcher;
+                const node = get_network_node(state, tile_index);
+                var network = get_network(state, node.network_id);
+
+
+                { // research logic
+                    if(researcher.input.is_empty() or !network.consume_power(20)) {
+                        researcher.progress = 0;
+                        return;
+                    }
+    
+                    researcher.progress += 1;
+
+                    const current_item = researcher.input.item.?;
+
+                    if(researcher.progress >= current_item.science_amount()) {
+                        researcher.progress = 0;
+                        _ = researcher.input.take_amount(1);
+                    }
+                }
+            },
             else => unreachable,
         }
     }
 
     fn player_interacted(self: Self, tile_index: usize, state: *State) void {
         switch (self) {
-            .miner, .furnace, .crusher => {
+            .miner, .furnace, .crusher, .researcher => {
                 open_inventory(state, tile_index);
             },
             .belt => {
@@ -1482,6 +1533,19 @@ const Tile = enum(u8) {
                     },
                 },
             },
+            .researcher => TileData{
+                .tile_index = 0,
+                .data = .{
+                    .researcher = .{
+                        .input = InventorySlot{
+                            .item = null,
+                            .count = 0,
+                            .flags = InventorySlot.only_science_flag,
+                        },
+                        .progress = 0,
+                    },
+                },
+            },
             else => std.debug.panic("trying to get default tile data of a tile that has none: {}\n", .{self.*}),
         };
     }
@@ -1561,6 +1625,10 @@ const TileData = struct {
             output: InventorySlot,
             progress: i64,
         },
+        researcher: struct{
+            input: InventorySlot,
+            progress: i64,
+        },
     },
 };
 
@@ -1568,10 +1636,12 @@ const Item = enum {
     const Self = @This();
 
     iron,
+    copper,
     miner,
     coal,
     furnace,
     iron_ingot,
+    copper_ingot,
     stone,
     wood,
     belt,
@@ -1582,6 +1652,21 @@ const Item = enum {
     crusher,
     researcher,
     splitter,
+    red_science,
+
+    fn is_science(self: *const Self) bool {
+        return switch (self.*) {  
+            .red_science => true,
+            else => false,
+        };
+    }
+
+    fn science_amount(self: *const Self) usize {
+        return switch (self.*) {  
+            .red_science => 50,
+            else => unreachable,
+        };
+    }
 
     fn can_be_fuel(self: *const Self) bool {
         return switch (self.*) {  
@@ -1600,7 +1685,7 @@ const Item = enum {
 
     fn can_be_smelted(self: *const Self) bool {
         return switch (self.*) {  
-            .iron => true,
+            .iron, .copper => true,
             else => false,
         };
     }
@@ -1608,6 +1693,7 @@ const Item = enum {
     fn item_when_smelted(self: *const Self) ?Item {
         return switch (self.*) {  
             .iron => .iron_ingot,
+            .copper => .copper_ingot,
             else => null,
         };
     }
@@ -1629,10 +1715,12 @@ const Item = enum {
     fn get_texture(self: *const Self) raylib.Texture {
         return switch (self.*) {  
             .iron => get_item_texture(.iron),
+            .copper => get_item_texture(.copper),
             .miner => get_tile_texture(.miner),
             .coal => get_item_texture(.coal),
             .furnace => get_tile_texture(.furnace),
             .iron_ingot => get_item_texture(.iron_ingot),
+            .copper_ingot => get_item_texture(.copper_ingot),
             .stone => get_item_texture(.stone),
             .wood => get_item_texture(.wood),
             .belt => get_tile_texture(.belt),
@@ -1643,6 +1731,7 @@ const Item = enum {
             .crusher => get_tile_texture(.crusher),
             .researcher => get_tile_texture(.researcher),
             .splitter => get_tile_texture(.splitter),
+            .red_science => get_item_texture(.red_science),
         };
     }
 
@@ -1756,12 +1845,17 @@ const UI = struct {
         input_slot: UIIInventorySlot,
         output_slot: UIIInventorySlot,
     },
+    researcher_panel: struct {
+        tile_index: usize,
+        input_slot: UIIInventorySlot,
+    },
     current_panel: enum {
         none,
         crafting,
         miner,
         furnace,
-        crusher
+        crusher,
+        researcher
     },
 
     fn init() Self {
@@ -1907,6 +2001,24 @@ const UI = struct {
             };
         }
 
+        // researcher inventory init
+        {
+            const slot_size = 50;
+            
+            const input_slot_x = (window_width() * 0.5) + 100 - (slot_size * 0.5);
+            const slot_y = (window_height() * 0.5) - (slot_size * 0.5);
+
+            ui.researcher_panel = .{
+                .tile_index = 0,
+                .input_slot = .{
+                    .x = input_slot_x,
+                    .y = slot_y,
+                    .size = slot_size,
+                    .flags = 0,
+                },
+            };
+        }
+
         return ui;
     } 
 };
@@ -1916,10 +2028,6 @@ fn open_inventory(state: *State, tile_index: usize) void {
     std.debug.assert(state.g.ui.current_panel == .none);
 
     const tile = state.g.forground_tiles[tile_index].tile;
-
-    if(!tile.has_clickable_ui()) {
-        return;
-    }
 
     switch (tile) {
         .miner => {
@@ -1934,6 +2042,10 @@ fn open_inventory(state: *State, tile_index: usize) void {
             state.g.ui.current_panel = .crusher;
             state.g.ui.crusher_panel.tile_index = tile_index;
         },
+        .researcher => {
+            state.g.ui.current_panel = .researcher;
+            state.g.ui.researcher_panel.tile_index = tile_index;
+        },
         else => unreachable,
     } 
 }
@@ -1944,6 +2056,7 @@ fn close_inventory(state: *State) void {
     state.g.ui.miner_panel.tile_index = 0;
     state.g.ui.furnace_panel.tile_index = 0;
     state.g.ui.crusher_panel.tile_index = 0;
+    state.g.ui.researcher_panel.tile_index = 0;
 }
 
 fn is_viewing_inventory(state: *const State) bool {
@@ -1962,6 +2075,7 @@ const InventorySlot = struct {
     const only_take_flag: u8          = 0b00000100;
     const only_placeable_flag: u8     = 0b00001000;
     const only_crushable_flag: u8     = 0b00010000;
+    const only_science_flag: u8       = 0b00100000;
 
     const Self = @This();
 
@@ -2445,12 +2559,12 @@ pub fn update(state: *State, delta_time: f32) void {
                         break :panels;
                     }
 
-                    const miner_tile_data = get_tile_data(state, miner_panel.tile_index);
+                    const miner = &get_tile_data(state, miner_panel.tile_index).data.miner;
 
                     if(miner_panel.input_slot.mouse_over(mouse_position)) {
                         target_slots = .{
                             .ui_slot = &miner_panel.input_slot,
-                            .slot = &miner_tile_data.data.miner.input
+                            .slot = &miner.input
                         };
 
                         break :find_target_slot;
@@ -2459,7 +2573,7 @@ pub fn update(state: *State, delta_time: f32) void {
                     if(miner_panel.output_slot.mouse_over(mouse_position)) {
                         target_slots = .{
                             .ui_slot = &miner_panel.output_slot,
-                            .slot = &miner_tile_data.data.miner.output
+                            .slot = &miner.output
                         };
 
                         break :find_target_slot;
@@ -2472,12 +2586,12 @@ pub fn update(state: *State, delta_time: f32) void {
                         break :panels;
                     }
 
-                    const furnace_tile_data = get_tile_data(state, furnace_panel.tile_index);
+                    const furnace = &get_tile_data(state, furnace_panel.tile_index).data.furnace;
 
                     if(furnace_panel.input_fuel_slot.mouse_over(mouse_position)) {
                         target_slots = .{
                             .ui_slot = &furnace_panel.input_fuel_slot,
-                            .slot = &furnace_tile_data.data.furnace.fuel_input
+                            .slot = &furnace.fuel_input
                         };
 
                         break :find_target_slot;
@@ -2486,7 +2600,7 @@ pub fn update(state: *State, delta_time: f32) void {
                     if(furnace_panel.input_ingredient_slot.mouse_over(mouse_position)) {
                         target_slots = .{
                             .ui_slot = &furnace_panel.input_ingredient_slot,
-                            .slot = &furnace_tile_data.data.furnace.ingredient_input
+                            .slot = &furnace.ingredient_input
                         };
 
                         break :find_target_slot;
@@ -2495,7 +2609,7 @@ pub fn update(state: *State, delta_time: f32) void {
                     if(furnace_panel.output_slot.mouse_over(mouse_position)) {
                         target_slots = .{
                             .ui_slot = &furnace_panel.output_slot,
-                            .slot = &furnace_tile_data.data.furnace.output
+                            .slot = &furnace.output
                         };
 
                         break :find_target_slot;
@@ -2508,12 +2622,12 @@ pub fn update(state: *State, delta_time: f32) void {
                         break :panels;
                     }
 
-                    const crusher_tile_data = get_tile_data(state, crusher_panel.tile_index);
+                    const crusher = &get_tile_data(state, crusher_panel.tile_index).data.crusher;
 
                     if(crusher_panel.input_slot.mouse_over(mouse_position)) {
                         target_slots = .{
                             .ui_slot = &crusher_panel.input_slot,
-                            .slot = &crusher_tile_data.data.crusher.input
+                            .slot = &crusher.input
                         };
 
                         break :find_target_slot;
@@ -2522,7 +2636,25 @@ pub fn update(state: *State, delta_time: f32) void {
                     if(crusher_panel.output_slot.mouse_over(mouse_position)) {
                         target_slots = .{
                             .ui_slot = &crusher_panel.output_slot,
-                            .slot = &crusher_tile_data.data.crusher.output
+                            .slot = &crusher.output
+                        };
+
+                        break :find_target_slot;
+                    }
+                },
+                .researcher => {
+                    const researcher_panel = &state.g.ui.researcher_panel;
+                    if(state.g.forground_tiles[researcher_panel.tile_index].tile != .researcher) {
+                        close_inventory(state);
+                        break :panels;
+                    }
+
+                    const researcher = &get_tile_data(state, researcher_panel.tile_index).data.researcher;
+
+                    if(researcher_panel.input_slot.mouse_over(mouse_position)) {
+                        target_slots = .{
+                            .ui_slot = &researcher_panel.input_slot,
+                            .slot = &researcher.input
                         };
 
                         break :find_target_slot;
@@ -2878,6 +3010,23 @@ pub fn draw(state: *State) void {
 
                 crusher_panel.input_slot.draw(&crusher.input, raylib.BLUE, state.scratch_space.allocator());
                 crusher_panel.output_slot.draw(&crusher.output, raylib.RED, state.scratch_space.allocator());
+            },
+            .researcher => {
+                const researcher_panel = &state.g.ui.researcher_panel;
+
+                const background_height = 300;
+                const background_width = 400;
+
+                render.draw_texture_pro(get_alt_texture(.item_slot), window_width() * 0.5, (window_height() * 0.5) - (background_height * 0.5), background_width, background_height, 0, raylib.WHITE, false);
+
+                if(state.g.forground_tiles[researcher_panel.tile_index].tile != .researcher) {
+                    close_inventory(state);
+                    break :game_ui_drawing;
+                }
+
+                const researcher = &get_tile_data(state, researcher_panel.tile_index).data.researcher;
+
+                researcher_panel.input_slot.draw(&researcher.input, raylib.BLUE, state.scratch_space.allocator());
             },
         }
 

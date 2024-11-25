@@ -32,10 +32,10 @@ const curved_belt_left_spline_path = "curved-belt-left.spline";
 const curved_belt_right_spline_path = "curved-belt-right.spline";
 
 // TILES
-var tile_textures: [18]raylib.Texture = .{undefined} ** 18;
+var tile_textures: [19]raylib.Texture = .{undefined} ** 19;
 
 // ITEMS
-var item_textures: [5]raylib.Texture = .{undefined} ** 5;
+var item_textures: [8]raylib.Texture = .{undefined} ** 8;
 
 // ALTS
 var alt_textures: [1]raylib.Texture = .{undefined} ** 1;
@@ -46,6 +46,7 @@ var alt_textures: [1]raylib.Texture = .{undefined} ** 1;
 const grass_tile_image_path = "tiles/grass.png";
 const stone_tile_image_path = "tiles/stone.png";
 const iron_ore_tile_image_path = "tiles/iron_ore.png";
+const copper_ore_tile_image_path = "tiles/copper_ore.png";
 const miner_tile_image_path = "tiles/miner.png";
 const coal_ore_tile_image_path = "tiles/coal_ore.png";
 const furnace_tile_image_path = "tiles/furnace.png";
@@ -64,10 +65,13 @@ const splitter_image_path = "tiles/splitter.png";
 
 // ITEMS
 const iron_item_image_path = "items/iron.png";
+const copper_item_image_path = "items/copper.png";
 const coal_item_image_path = "items/coal.png";
 const iron_ingot_item_image_path = "items/iron_ingot.png";
+const copper_ingot_item_image_path = "items/copper_ingot.png";
 const stone_item_image_path = "items/stone.png";
 const wood_item_image_path = "items/wood.png";
+const red_science_item_image_path = "items/red_science.png";
 
 // ALTS
 const item_slot_image_path = "items/item_slot.png";
@@ -76,6 +80,7 @@ pub const TileTextures = enum {
     grass,
     stone,
     iron_ore,
+    copper_ore,
     miner,
     coal_ore,
     furnace,
@@ -95,10 +100,13 @@ pub const TileTextures = enum {
 
 pub const ItemTextures = enum {
     iron,
+    copper,
     coal,
     iron_ingot,
+    copper_ingot,
     stone,
-    wood
+    wood,
+    red_science
 };
 
 pub const AltTextures = enum {
@@ -445,6 +453,7 @@ pub fn load_resources() !void {
         try load_texture(grass_tile_image_path),
         try load_texture(stone_tile_image_path),
         try load_texture(iron_ore_tile_image_path),
+        try load_texture(copper_ore_tile_image_path),
         try load_texture(miner_tile_image_path),
         try load_texture(coal_ore_tile_image_path),
         try load_texture(furnace_tile_image_path),
@@ -464,10 +473,13 @@ pub fn load_resources() !void {
 
     item_textures = .{
        try load_texture(iron_item_image_path),
+       try load_texture(copper_item_image_path),
        try load_texture(coal_item_image_path),
        try load_texture(iron_ingot_item_image_path),
+       try load_texture(copper_ingot_item_image_path),
        try load_texture(stone_item_image_path),
        try load_texture(wood_item_image_path),
+       try load_texture(red_science_item_image_path),
     };
 
     alt_textures = .{
