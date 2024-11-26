@@ -29,8 +29,9 @@ const player_speed: f32 = 450;
 const debug_networks = true;
 var debug_memory_usage = false; // toggled with m
 
-
 const max_item_stack = 99;
+
+const start_from_save = false;
 
 /////////////////////////////////////////////////////////////////////////////////
 ///                         @state
@@ -310,6 +311,13 @@ const WorldPosition = struct {
     x: f32, 
     y: f32,
 
+    fn from_raylb_vector(vector: raylib.Vector2) WorldPosition {
+        return .{
+            .x = vector.x,
+            .y = vector.y
+        };
+    }
+
     fn to_tile_position(self: *const Self) TilePosition {
         // used for debuging should be removed at some point
         if(!self.in_world_bounds()) {
@@ -320,6 +328,13 @@ const WorldPosition = struct {
         const y = @divFloor(@as(usize, @intFromFloat(self.y)), tile_height);
     
         return .{.x = x, .y = y};
+    }
+
+    fn to_clamped_in_world_bounds(self: *const Self) Self {
+        return .{
+           .x = std.math.clamp(self.x, 0, @as(f32, @floatFromInt(tile_width * world_tile_width))),
+           .y = std.math.clamp(self.y, 0, @as(f32, @floatFromInt(tile_height * world_tile_height)))
+        };
     }
 
     fn in_world_bounds(self: *const Self) bool {
@@ -2349,6 +2364,12 @@ const Player = struct {
 /////////////////////////////////////////////////////////////////////////////////
 pub fn start(state: *State) void {
     generate_world(state);
+
+    if(start_from_save) {
+        load_game_data(state) catch |err| {
+            std.debug.print("error loading game data{any}\n", .{err});
+        };
+    }
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -2781,111 +2802,130 @@ pub fn draw(state: *State) void {
     raylib.ClearBackground(raylib.PURPLE);
     raylib.BeginMode2D(state.g.camera);
 
-    // background tiles
-    for(0..state.g.background_tiles.len) |i| {
-        const tile_coords = get_tile_position_from_tile_index(i);
-        const world_position = tile_coords.to_world_position();
+    const camera_top_left_world_position        = raylib.GetScreenToWorld2D(.{.x = 0, .y = 0}, state.g.camera);
+    const camera_bottom_right_world_position    = raylib.GetScreenToWorld2D(.{.x = window_width() + tile_width, .y = window_height() + tile_height}, state.g.camera);
 
-        const texture = state.g.background_tiles[i].get_default_texture();
-        render.draw_texture(texture, world_position.x, world_position.y, tile_width, tile_height);
+    var camera_top_left_tile_position        = WorldPosition.from_raylb_vector(camera_top_left_world_position).to_clamped_in_world_bounds().to_tile_position();
+    var camera_bottom_right_tile_position    = WorldPosition.from_raylb_vector(camera_bottom_right_world_position).to_clamped_in_world_bounds().to_tile_position();
+
+    const camera_top_left_tile_index        = camera_top_left_tile_position.get_tile_index();
+    const camera_bottom_right_tile_index    = camera_bottom_right_tile_position.get_tile_index();
+
+    const render_window_tile_width = camera_bottom_right_tile_position.x - camera_top_left_tile_position.x;
+    const render_window_jump_amount = world_tile_width - render_window_tile_width;
+    var render_window_current_index = camera_top_left_tile_index;
+ 
+    // backgrounds tiles
+    while(render_window_current_index <= camera_bottom_right_tile_index) : (render_window_current_index += render_window_jump_amount - 1) {
+        const this_row_end_index = render_window_current_index + render_window_tile_width;
+        
+        while(render_window_current_index <= this_row_end_index) : (render_window_current_index += 1) {
+            const tile_coords = get_tile_position_from_tile_index(render_window_current_index);
+            const world_position = tile_coords.to_world_position();
+
+            const texture = state.g.background_tiles[render_window_current_index].get_default_texture();
+            render.draw_texture(texture, world_position.x, world_position.y, tile_width, tile_height);
+        }
     }
+
+    // reset to start drawing from the same place for forground
+    render_window_current_index = camera_top_left_tile_index;
 
     // foreground tiles
-    for(0..state.g.forground_tiles.len) |i| {
-        const tile_position = get_tile_position_from_tile_index(i);
-        const world_position = tile_position.to_world_position();
-
-        const forground_tile = state.g.forground_tiles[i];
-        if(forground_tile.tile == .air) {
-            continue;
-        }
-
-        const texture = forground_tile.tile.get_texture(i, state);
-
-        // update draw location based on the rotation
-        // this is because textures are drawn from the
-        // top left corner
-        var rotated_position = world_position;
-        if(forground_tile.tile.has_direction()) {
-            rotated_position = move_draw_location_on_direction(world_position, forground_tile.direction);
-        }
-
-        render.draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
-
-        // special belt render
-        {
-            if(forground_tile.tile == .belt) {
-                const icon_size = 6;
-
-                const belt = &get_tile_data(state, i).data.belt;
-
-                const left_spline_to_use = get_belt_spline(
-                    belt.relative_output_direction == Direction.up,
-                    true,
-                    forground_tile.direction,
-                    belt.relative_output_direction
-                );
-
-                const right_spline_to_use = get_belt_spline(
-                    belt.relative_output_direction == Direction.up,
-                    false,
-                    forground_tile.direction,
-                    belt.relative_output_direction
-                );
-
-                // TODO: at some point figure out how to do interpolation for these points
-                for(&belt.left_storage, 0..) |*slot, slot_index| {
-                    if(slot.is_empty()) {
-                        continue;
-                    }
-
-                    const spline_point = left_spline_to_use.buffer[slot_index];
-                    const draw_position = WorldPosition{
-                        .x = world_position.x + (spline_point.x * tile_width),
-                        .y = world_position.y + (spline_point.y * tile_width),
-                    };
-
-                    const item_texture = slot.item.?.get_texture();
-                    render.draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
-                }
-
-                for(&belt.right_storage, 0..) |*slot, slot_index| {
-                    if(slot.is_empty()) {
-                        continue;
-                    }
-
-                    const spline_point = right_spline_to_use.buffer[slot_index];
-                    const draw_position = WorldPosition{
-                        .x = world_position.x + (spline_point.x * tile_width),
-                        .y = world_position.y + (spline_point.y * tile_width),
-                    };
-
-                    const item_texture = slot.item.?.get_texture();
-                    render.draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
-                }
+    while(render_window_current_index <= camera_bottom_right_tile_index) : (render_window_current_index += render_window_jump_amount - 1) {
+        const this_row_end_index = render_window_current_index + render_window_tile_width;
+        
+        while(render_window_current_index <= this_row_end_index) : (render_window_current_index += 1) {
+            const tile_position = get_tile_position_from_tile_index(render_window_current_index);
+            const world_position = tile_position.to_world_position();
+    
+            const forground_tile = state.g.forground_tiles[render_window_current_index];
+            if(forground_tile.tile == .air) {
+                continue;
             }
-        }
-
-        if(debug_networks) {
-            if(forground_tile.tile.is_network_node()) {
-                const node = get_network_node(state, i);
-
-                const id_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{node.network_id}) catch unreachable;
-                render.text(id_string, world_position.x, world_position.y, 10, raylib.GREEN);
-
-                const connections_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{node.neighbour_tile_indices.slice().len}) catch unreachable;
-                render.text(connections_string, world_position.x, world_position.y + 10, 10, raylib.BLUE);
+    
+            const texture = forground_tile.tile.get_texture(render_window_current_index, state);
+    
+            // update draw location based on the rotation
+            // this is because textures are drawn from the
+            // top left corner
+            var rotated_position = world_position;
+            if(forground_tile.tile.has_direction()) {
+                rotated_position = move_draw_location_on_direction(world_position, forground_tile.direction);
+            }
+    
+            render.draw_texture_pro(texture, rotated_position.x, rotated_position.y, tile_width, tile_height, forground_tile.direction.get_rotation(), raylib.WHITE, false);
+    
+            // special belt render
+            {
+                if(forground_tile.tile == .belt) {
+                    const icon_size = 6;
+    
+                    const belt = &get_tile_data(state, render_window_current_index).data.belt;
+    
+                    const left_spline_to_use = get_belt_spline(
+                        belt.relative_output_direction == Direction.up,
+                        true,
+                        forground_tile.direction,
+                        belt.relative_output_direction
+                    );
+    
+                    const right_spline_to_use = get_belt_spline(
+                        belt.relative_output_direction == Direction.up,
+                        false,
+                        forground_tile.direction,
+                        belt.relative_output_direction
+                    );
+    
+                    // TODO: at some point figure out how to do interpolation for these points
+                    for(&belt.left_storage, 0..) |*slot, slot_index| {
+                        if(slot.is_empty()) {
+                            continue;
+                        }
+    
+                        const spline_point = left_spline_to_use.buffer[slot_index];
+                        const draw_position = WorldPosition{
+                            .x = world_position.x + (spline_point.x * tile_width),
+                            .y = world_position.y + (spline_point.y * tile_width),
+                        };
+    
+                        const item_texture = slot.item.?.get_texture();
+                        render.draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
+                    }
+    
+                    for(&belt.right_storage, 0..) |*slot, slot_index| {
+                        if(slot.is_empty()) {
+                            continue;
+                        }
+    
+                        const spline_point = right_spline_to_use.buffer[slot_index];
+                        const draw_position = WorldPosition{
+                            .x = world_position.x + (spline_point.x * tile_width),
+                            .y = world_position.y + (spline_point.y * tile_width),
+                        };
+    
+                        const item_texture = slot.item.?.get_texture();
+                        render.draw_texture_pro(item_texture, draw_position.x, draw_position.y, icon_size, icon_size, 0, raylib.WHITE, true);
+                    }
+                }
             }
         }
     }
 
-    // network connections debug
+    // draw network connections debug info
     if(debug_networks) {
         for(state.g.network_nodes.items) |*node| {
-            const node_world_position = get_tile_position_from_tile_index(node.tile_index).to_world_position();
+            const world_position = get_tile_position_from_tile_index(node.tile_index).to_world_position();
+            
+            const id_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{node.network_id}) catch unreachable;
+            render.text(id_string, world_position.x, world_position.y, 10, raylib.GREEN);
+
+            const connections_string = std.fmt.allocPrintZ(state.scratch_space.allocator(), "{}", .{node.neighbour_tile_indices.slice().len}) catch unreachable;
+            render.text(connections_string, world_position.x, world_position.y + 10, 10, raylib.BLUE);
+
             for(node.neighbour_tile_indices.slice()) |neighbour_tile_index| {
                 const neighbour_world_position = get_tile_position_from_tile_index(neighbour_tile_index).to_world_position();
-                render.line(node_world_position.x, node_world_position.y, neighbour_world_position.x, neighbour_world_position.y, 1, raylib.RED);
+                render.line(world_position.x, world_position.y, neighbour_world_position.x, neighbour_world_position.y, 1, raylib.RED);
             }
         }
     }
