@@ -16,8 +16,8 @@ const fastnoise = @import("fastnoise.zig");
 const game = @import("game.zig");
 const spline_editor = @import("spline_editor.zig");
 
-const default_screen_width = 1800;
-const default_screen_height = 1100;
+const default_screen_width = 1200;
+const default_screen_height = 900;
 
 var time_per_tick: f32 = 0.1;
       
@@ -141,14 +141,15 @@ pub const State = struct {
         left_shift: bool,
     };
 
-    const KeyState = enum {
+    const InputState = enum {
         up,
         down, 
         pressing, 
         released,
     };
 
-    keyboard: [297]KeyState,
+    keyboard: [348]InputState,
+    mouse: [7]InputState,
     input: Input,
     allocator: std.mem.Allocator,
     underlying_arena: *std.heap.ArenaAllocator,
@@ -167,7 +168,8 @@ pub const State = struct {
     // use the allocator field for actual allocation
     fn init(arena: *std.heap.ArenaAllocator, allocator: std.mem.Allocator) !State { 
         return Self { 
-            .keyboard = [_]State.KeyState{.up} ** 297,
+            .keyboard = [_]State.InputState{.up} ** 348,
+            .mouse = [_]State.InputState{.up} ** 7,
             .input = std.mem.zeroes(State.Input),
             .allocator = allocator,
             .underlying_arena = arena,
@@ -237,6 +239,20 @@ pub const State = struct {
             }
         }
 
+        for(&self.mouse, 0..) |_, i| {
+            if(raylib.IsMouseButtonDown(@intCast(i))) {
+                if(raylib.IsMouseButtonPressed(@intCast(i))) {
+                    self.mouse[i] = .down;
+                } else {
+                    self.mouse[i] = .pressing;
+                }
+            } else if(raylib.IsMouseButtonReleased(@intCast(i))) {
+                self.mouse[i] = .released;
+            } else {
+                self.mouse[i] = .up;
+            }
+        }
+
         self.input.numbers[0] = raylib.IsKeyDown(raylib.KEY_ONE);
         self.input.numbers[1] = raylib.IsKeyDown(raylib.KEY_TWO);
         self.input.numbers[2] = raylib.IsKeyDown(raylib.KEY_THREE);
@@ -257,8 +273,12 @@ pub const State = struct {
         return self.tick_timer >= self.time_per_tick;
     }
 
-    pub fn key(self: *const Self, k: c_int) Self.KeyState {
+    pub fn key(self: *const Self, k: c_int) Self.InputState {
         return self.keyboard[@intCast(k)];
+    }
+
+    pub fn mouse_button(self: *const Self, k: c_int) Self.InputState {
+        return self.mouse[@intCast(k)];
     }
 };
 

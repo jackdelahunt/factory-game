@@ -97,8 +97,8 @@ pub const GameState = struct {
             .ui = UI.init(),
         };
 
+        // @cheats
         if(true) {
-            // temp adding items to inventory 
             self.player.inventory[0].item = .miner;         self.player.inventory[0].count = 99;
             self.player.inventory[1].item = .extractor;     self.player.inventory[1].count = 99;
             self.player.inventory[2].item = .belt;          self.player.inventory[2].count = 99;
@@ -209,6 +209,15 @@ const crafting_recipes = [_]CraftingRecipe {
         .inputs = [_]CraftingRecipe.RecipeItem{
             .{.item = .iron_ingot, .count = 10},
             .{.item = .copper_ingot, .count = 10},
+        },
+        .input_count = 2,
+    },
+    // red science
+    .{
+        .output = .{.item = .red_science, .count = 1},
+        .inputs = [_]CraftingRecipe.RecipeItem{
+            .{.item = .iron_ingot, .count = 1},
+            .{.item = .copper_ingot, .count = 1},
         },
         .input_count = 2,
     }
@@ -2432,20 +2441,6 @@ pub fn update(state: *State, delta_time: f32) void {
                 state.g.ui.current_panel = .crafting; 
             }
         }
-    
-        if(state.key(raylib.KEY_R) == .down) {
-            // only change direction if current slot is a tile
-            // that can be placed and can be rotated
-            const slot = state.g.player.get_selected_inventory_slot();
-            if(slot.item) |item| {
-                if(item.can_be_placed()) {
-                    const tile = item.tile_when_placed();
-                    if(tile.has_direction()) {
-                        state.g.player.placement_dirction.next();
-                    }
-                }
-            }
-        }
     }
 
     // hud inventory update
@@ -2491,22 +2486,30 @@ pub fn update(state: *State, delta_time: f32) void {
         const tile_coords = mouse_position.to_tile_position();
         const tile_index = tile_coords.get_tile_index();
 
-        if(state.input.right_mouse) {
-            if(state.g.forground_tiles[tile_index].tile != .air) {
-                state.g.forground_tiles[tile_index].tile.player_interacted(tile_index, state);
-                break :mouse_update;
-            }
-
-            const current_selected_item = state.g.player.get_selected_item_type();
-            if(current_selected_item != null and current_selected_item.?.can_be_placed()) {
-                const tile = current_selected_item.?.tile_when_placed();
-                if(place_tile_in_foreground(state, tile_index, tile)) {
-                    _ = state.g.player.try_pop_selected_item();
+        // right mouse button logic
+        switch (state.mouse_button(raylib.MOUSE_BUTTON_RIGHT)) {
+            .down => {
+                if(state.g.forground_tiles[tile_index].tile != .air) {
+                    state.g.forground_tiles[tile_index].tile.player_interacted(tile_index, state);
+                    break :mouse_update;
+                }    
+            },
+            .pressing => {
+                if(state.g.forground_tiles[tile_index].tile == .air) {
+                    const current_selected_item = state.g.player.get_selected_item_type();
+                    if(current_selected_item != null and current_selected_item.?.can_be_placed()) {
+                        const tile = current_selected_item.?.tile_when_placed();
+                        if(place_tile_in_foreground(state, tile_index, tile)) {
+                            _ = state.g.player.try_pop_selected_item();
+                        }
+                    }
                 }
-            }
+            },
+            else => {}
         }
 
-        if(state.input.left_mouse) {
+        // left mouse button logic
+        if(state.mouse_button(raylib.MOUSE_BUTTON_LEFT) == .down) {
             const removed_tile = remove_tile_in_foreground(state, tile_index);
 
             if(removed_tile) |value| {
@@ -2515,6 +2518,32 @@ pub fn update(state: *State, delta_time: f32) void {
                     // we just ignore it and the item vanishes of course
                     // this is not ideal
                     _ = state.g.player.add_item_to_inventory(item, 1);
+                }
+            }
+        }
+
+        // rotate logic
+        if(state.key(raylib.KEY_R) == .down) {
+            const f_tile = &state.g.forground_tiles[tile_index];
+            if(f_tile.tile == .air) {
+                const slot = state.g.player.get_selected_inventory_slot();
+                if(slot.item) |item| {
+                    if(item.can_be_placed() and item.tile_when_placed().has_direction()) {
+                        state.g.player.placement_dirction.next();
+                    }
+                }
+            } else if(f_tile.tile.has_direction()) {
+                if(f_tile.tile == .belt and state.key(raylib.KEY_LEFT_SHIFT) == .pressing) {
+                    const belt = &get_tile_data(state, tile_index).data.belt;
+                    belt.relative_output_direction.next();
+
+                    // skip down output because that cannot happen :{
+                    if(belt.relative_output_direction == .down) {
+                        belt.relative_output_direction = .left;
+                    }
+                } else {
+                    f_tile.direction.next();
+                    tile_update_adjectcent_tiles(state, tile_index);
                 }
             }
         }
@@ -2874,25 +2903,26 @@ pub fn draw(state: *State) void {
 
         const tile_position = mouse_world_position.to_tile_position();
         const tile_index = tile_position.get_tile_index();
-
-        if(state.g.forground_tiles[tile_index].tile != .air) {
-            break :tile_preview;
-        }
-
         var world_position = tile_position.to_world_position();
 
-        const selected_slot = state.g.player.get_selected_inventory_slot();
-        if(selected_slot.item) |item| {
-            if(item.can_be_placed()) {
-                const tile = item.tile_when_placed();
-                if(tile.has_direction()) {
-                    world_position = move_draw_location_on_direction(world_position, state.g.player.placement_dirction);
+        // if it is air then draw ghost tile from the hand
+        // else draw highlight over tile
+        if(state.g.forground_tiles[tile_index].tile == .air) {
+    
+            const selected_slot = state.g.player.get_selected_inventory_slot();
+            if(selected_slot.item) |item| {
+                if(item.can_be_placed()) {
+                    const tile = item.tile_when_placed();
+                    if(tile.has_direction()) {
+                        world_position = move_draw_location_on_direction(world_position, state.g.player.placement_dirction);
+                    }
+    
+                    const direction = if(tile.has_direction()) state.g.player.placement_dirction else .down;
+                    render.draw_texture_pro(tile.get_default_texture(), world_position.x, world_position.y, tile_width, tile_height, direction.get_rotation(), raylib.Fade(raylib.WHITE, 0.6), false);
                 }
-
-                const direction = if(tile.has_direction()) state.g.player.placement_dirction else .down;
-
-                render.draw_texture_pro(tile.get_default_texture(), world_position.x, world_position.y, tile_width, tile_height, direction.get_rotation(), raylib.Fade(raylib.WHITE, 0.6), false);
             }
+        } else {
+            render.rectangle_outline(world_position.x, world_position.y, tile_width, tile_height, 1, raylib.Fade(raylib.RED, 0.3));
         }
     }
 

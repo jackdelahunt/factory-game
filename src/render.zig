@@ -151,6 +151,19 @@ pub fn rectangle(x: f32, y: f32, width: f32, height: f32, color: raylib.Color) v
     );
 }
 
+pub fn rectangle_outline(x: f32, y: f32, width: f32, height: f32, thickness: f32, color: raylib.Color) void {
+    raylib.DrawRectangleLinesEx(
+        .{
+            .x = x,
+            .y = y, 
+            .width = width, 
+            .height = height,
+        },
+        thickness,
+        color
+    );
+}
+
 pub fn rectangle_gradient_vertical(x: f32, y: f32, width: f32, height: f32, start_color: raylib.Color, end_color: raylib.Color) void {
     raylib.DrawRectangleGradientV(
         @as(c_int, @intFromFloat(x)), 
