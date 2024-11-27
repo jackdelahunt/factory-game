@@ -126,6 +126,15 @@ pub const GameState = struct {
 };
 
 /////////////////////////////////////////////////////////////////////////////////
+///                         @technology
+/////////////////////////////////////////////////////////////////////////////////
+const Technology = struct {
+    red_science_required: usize,
+    unlock: CraftingRecipeType,
+    completed: bool
+};
+
+/////////////////////////////////////////////////////////////////////////////////
 ///                         @crafting
 /////////////////////////////////////////////////////////////////////////////////
 const CraftingRecipe = struct {
@@ -140,7 +149,19 @@ const CraftingRecipe = struct {
     }
 };
 
-const crafting_recipes = [_]CraftingRecipe {
+const CraftingRecipeType = enum {
+    furnace,
+    miner,
+    extractor,
+    belt,
+    splitter,
+    pole,
+    batery,
+    researcher,
+    red_science,
+};
+
+const crafting_recipes = [std.meta.fields(CraftingRecipeType).len]CraftingRecipe {
     // furnace
     .{
         .output = .{.item = .furnace, .count = 1},
