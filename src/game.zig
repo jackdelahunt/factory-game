@@ -137,16 +137,13 @@ const Technology = struct {
 /////////////////////////////////////////////////////////////////////////////////
 ///                         @crafting
 /////////////////////////////////////////////////////////////////////////////////
+const max_recipe_inputs = 2;
+
 const CraftingRecipe = struct {
     const RecipeItem = struct {item: Item, count: usize};
 
     output: RecipeItem,
-    inputs: [2]RecipeItem,
-    input_count: usize,
-
-    fn empty_item() RecipeItem {
-        return .{.item = .stone, .count = 0};
-    }
+    inputs: std.BoundedArray(RecipeItem, max_recipe_inputs),
 };
 
 const CraftingRecipeType = enum {
@@ -165,83 +162,70 @@ const crafting_recipes = [std.meta.fields(CraftingRecipeType).len]CraftingRecipe
     // furnace
     .{
         .output = .{.item = .furnace, .count = 1},
-        .inputs = [_]CraftingRecipe.RecipeItem{
-            .{.item = .stone, .count = 5},
-            CraftingRecipe.empty_item(),
-        },
-        .input_count = 1,
+        .inputs = BoundedArray(CraftingRecipe.RecipeItem, max_recipe_inputs).init(.{
+            .{.item = .stone, .count = 5}
+        })
     },
     // miner
     .{
         .output = .{.item = .miner, .count = 1},
-        .inputs = [_]CraftingRecipe.RecipeItem{
+        .inputs = BoundedArray(CraftingRecipe.RecipeItem, max_recipe_inputs).init(.{
             .{.item = .iron_ingot, .count = 5},
-            .{.item = .stone, .count = 5},
-        },
-        .input_count = 2,
+            .{.item = .stone, .count = 5}
+        }),
     },
     // extractor
     .{
         .output = .{.item = .extractor, .count = 1},
-        .inputs = [_]CraftingRecipe.RecipeItem{
+        .inputs = BoundedArray(CraftingRecipe.RecipeItem, max_recipe_inputs).init(.{
             .{.item = .iron_ingot, .count = 5},
-            CraftingRecipe.empty_item()
-        },
-        .input_count = 1,
+        }),
     },
     // belts
     .{
         .output = .{.item = .belt, .count = 5},
-        .inputs = [_]CraftingRecipe.RecipeItem{
+        .inputs = BoundedArray(CraftingRecipe.RecipeItem, max_recipe_inputs).init(.{
             .{.item = .iron_ingot, .count = 5},
-            CraftingRecipe.empty_item()
-        },
-        .input_count = 1,
+        }),
     },
     // splitter
     .{
         .output = .{.item = .splitter, .count = 1},
-        .inputs = [_]CraftingRecipe.RecipeItem{
+        .inputs = BoundedArray(CraftingRecipe.RecipeItem, max_recipe_inputs).init(.{
             .{.item = .iron_ingot, .count = 5},
-            CraftingRecipe.empty_item()
-        },
-        .input_count = 1,
+        }),
     },
     // pole
     .{
         .output = .{.item = .pole, .count = 5},
-        .inputs = [_]CraftingRecipe.RecipeItem{
+        .inputs = BoundedArray(CraftingRecipe.RecipeItem, max_recipe_inputs).init(.{
             .{.item = .wood, .count = 6},
-            .{.item = .copper_ingot, .count = 2},
-        },
-        .input_count = 2,
+            .{.item = .copper_ingot, .count = 2}
+        }),
     },
     // battery
     .{
         .output = .{.item = .battery, .count = 1},
-        .inputs = [_]CraftingRecipe.RecipeItem{
+        .inputs = BoundedArray(CraftingRecipe.RecipeItem, max_recipe_inputs).init(.{
             .{.item = .iron_ingot, .count = 1},
-            .{.item = .copper_ingot, .count = 3},
-        },
-        .input_count = 2,
+            .{.item = .copper_ingot, .count = 3}
+        }),
     },
     // researcher
     .{
         .output = .{.item = .researcher, .count = 1},
-        .inputs = [_]CraftingRecipe.RecipeItem{
+        .inputs = BoundedArray(CraftingRecipe.RecipeItem, max_recipe_inputs).init(.{
             .{.item = .iron_ingot, .count = 10},
-            .{.item = .copper_ingot, .count = 10},
-        },
-        .input_count = 2,
+            .{.item = .copper_ingot, .count = 10}
+        }),
     },
     // red science
     .{
         .output = .{.item = .red_science, .count = 1},
-        .inputs = [_]CraftingRecipe.RecipeItem{
+        .inputs = BoundedArray(CraftingRecipe.RecipeItem, max_recipe_inputs).init(.{
             .{.item = .iron_ingot, .count = 1},
-            .{.item = .copper_ingot, .count = 1},
-        },
-        .input_count = 2,
+            .{.item = .copper_ingot, .count = 1}
+        }),
     }
 };
 
@@ -2245,7 +2229,7 @@ const Player = struct {
     placement_dirction: Direction,
 
     fn can_craft_recipe(self: *const Self, recipe: *const CraftingRecipe) bool {
-        for(&recipe.inputs) |*input| {
+        for(recipe.inputs.slice()) |*input| {
             var inputs_found: usize = 0;
 
             for(&self.inventory) |*slot| {
@@ -2262,7 +2246,7 @@ const Player = struct {
 
     fn craft_recipe(self: *Self, recipe: *const CraftingRecipe) void {
         input: 
-        for(&recipe.inputs) |*input| {
+        for(recipe.inputs.slice()) |*input| {
             var inputs_found: usize = 0;
 
             for(&self.inventory) |*slot| {
@@ -3696,9 +3680,8 @@ fn draw_crafting_recipe_output(recipe: *const CraftingRecipe, x: f32, y: f32, si
 fn draw_crafting_recipe_input(recipe: *const CraftingRecipe, x: f32, y: f32, size: f32) void {
     const padding = 5;
 
-    for(0..recipe.input_count) |_i| {
+    for(recipe.inputs.slice(), 0..) |input, _i| {
         const i = @as(f32, @floatFromInt(_i));
-        const input = &recipe.inputs[_i];
         const item_texture = input.item.get_texture();
         const input_x = x + (size * i) + (padding * i);
 
@@ -3730,6 +3713,42 @@ fn window_width() f32 {
 
 fn window_height() f32 {
     return @as(f32, @floatFromInt(raylib.GetScreenHeight()));
+}
+
+fn BoundedArray(comptime T: type, comptime buffer_size: usize) type {
+    return struct {
+        const Self = @This();
+
+        fn init(comptime args: anytype) std.BoundedArray(T, buffer_size) {
+            const ArgsType = @TypeOf(args);
+            const args_type_info = @typeInfo(ArgsType);
+            if (args_type_info != .Struct) {
+                @compileError("expected tuple or struct argument, found " ++ @typeName(ArgsType));
+            }
+
+            const fields_info = args_type_info.Struct.fields;
+            if (fields_info.len > buffer_size) {
+                @compileError("input elements are bigger then array capacity");
+            }
+
+            inline for (fields_info) |field| {
+                if(!field.is_comptime) {
+                    @compileError("each field in input must be comptime, " ++ field.name ++ " is not comptime");
+                }
+
+                // if(field.type != T) {
+                    // @compileError("type mismatch on elements in bounded array, expected: " ++ @typeName(T) ++ " got: " ++ @typeName(field.type));
+                // }
+            }
+
+            var array = std.BoundedArray(T, buffer_size).init(fields_info.len) catch unreachable;
+            inline for(0..fields_info.len) |i| {
+                array.slice()[i] = args[i];
+            }
+
+            return array;
+        }
+    };
 }
 
 // relative output direction is ignored if it is straight
