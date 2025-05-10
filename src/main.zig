@@ -16,8 +16,8 @@ const fastnoise = @import("fastnoise.zig");
 const game = @import("game.zig");
 const spline_editor = @import("spline_editor.zig");
 
-const default_screen_width = 1200;
-const default_screen_height = 900;
+const default_screen_width = 1920;
+const default_screen_height = 1080;
 
 var time_per_tick: f32 = 0.1;
       
